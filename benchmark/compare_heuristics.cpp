@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <set>
 
 // ── JSON parser (minimal) ──
 static std::string read_file(const std::string& path) {

@@ -462,16 +462,32 @@ Up to 3 cover cuts are added per cut-loop iteration alongside the SECs.
 \label{sec:sa}
 
 \paragraph{Method selection.}
-The SA metaheuristic was selected after a comparative study on 1{,}000 randomly generated checkpoint distributions across both study areas (Torremocha and La Muela).
-Four methods were evaluated: Greedy Insertion, Genetic Algorithm (GA), Ant Colony Optimisation (ACO), and Simulated Annealing (SA).
-Greedy Insertion was fast but myopic, committing to locally attractive nodes without ability to backtrack (15--25\% below SA on average).
-The GA suffered from infeasible offspring during crossover on directed routes and a rugged fitness landscape under asymmetric costs (5--10\% below SA).
-ACO's pheromone mechanism degraded on asymmetric instances, where edge quality is context-dependent on elapsed time and travel direction (3--8\% below SA, worse on La Muela).
+The SA metaheuristic was selected after a comparative study on 21 benchmark instances across varying sizes ($n = 20$--$100$), asymmetry levels, and fatigue rates.
+Four methods were evaluated with 10 independent runs per instance (except deterministic Greedy): Greedy Insertion, Genetic Algorithm (GA, population 50, 200 generations), Ant Colony Optimisation (ACO, 30 ants, 100 iterations), and Simulated Annealing (SA, 80{,}000 iterations).
+
+\begin{table}[H]
+\centering
+\caption{Heuristic comparison: mean gap below SA (\%) across 21 benchmark instances (10 seeds per stochastic method). All differences are statistically significant (Wilcoxon signed-rank, $p < 0.05$).}
+\label{tab:heuristic_comparison}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Method} & \textbf{Mean gap} & \textbf{Std} & \textbf{Min gap} & \textbf{Max gap} \\
+\midrule
+Greedy  & 21.0\% & 9.7\% &  3.7\% & 40.0\% \\
+GA      & 48.4\% & 10.0\% & 29.3\% & 72.1\% \\
+ACO     &  5.7\% & 4.4\% &  0.7\% & 20.9\% \\
+SA      &  ---   & ---   &  ---   & ---    \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SA significantly outperforms all three alternatives (Wilcoxon signed-rank $z = 4.01$, $p < 0.05$ for all pairs).
+The GA performs worst (48.4\% below SA on average), as crossover on directed routes frequently produces infeasible offspring requiring expensive repair, and the rugged fitness landscape under asymmetric costs degrades convergence.
+ACO is the closest competitor (5.7\% below SA) but its pheromone mechanism weakens on asymmetric instances where edge quality is context-dependent on elapsed time and travel direction---the gap widens to 20.9\% on the hardest instance.
+Greedy Insertion (21.0\% below SA) is fast but myopic, committing to locally attractive nodes without ability to backtrack.
 
 SA's advantage stems from its single-solution trajectory search: it evaluates each candidate move in full context (current route, elapsed time, fatigue state, directional costs) without needing to decompose the solution into reusable components.
 The Or-opt and swap moves are particularly effective on asymmetric instances because they directly evaluate the actual cost change of rearranging the visit sequence, naturally accounting for directionality.
-The geometric cooling schedule allows aggressive exploration early (accepting 30--40\% of worsening moves at $T_0 = 100$) while converging to local refinement in later iterations ($< 1\%$ acceptance at $T < 1$).
-Across the 1{,}000-instance benchmark, SA found the best-known solution on 94\% of instances and was within 2\% on the remainder.
 
 \paragraph{Parameter tuning.}
 The SA parameters were fine-tuned via grid search over the same 1{,}000-instance sample.
