@@ -189,13 +189,23 @@ struct LPModel {
         t_col.resize(n, -1);
         w_col.assign(n, std::vector<int>(n, -1));
 
-        // x[i][j] — pre-fix structurally infeasible arcs
+        // x[i][j] — pre-fix structurally infeasible arcs (base cost + fatigue-aware)
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (i == j || !std::isfinite(inp.cm[i][j])) continue;
                 bool infeasible = !std::isfinite(inp.cm[j][0]) ||
                                   inp.cm[i][j] + inp.cm[j][0] > inp.bud_raw ||
                                   inp.cm[0][i] + inp.cm[i][j] + inp.cm[j][0] > inp.bud_raw;
+                // Fatigue-aware elimination: even on the shortest path 0→i→j→0,
+                // the fatigue-adjusted cost must not exceed the budget
+                if (!infeasible && inp.fatigue_rate > 0) {
+                    double t_i = inp.cm[0][i];  // earliest arrival at i
+                    double t_j = t_i + inp.cm[i][j];  // earliest arrival at j
+                    double fat_cost = inp.cm[0][i] * (1.0 + inp.fatigue_rate * 0.0 / inp.bud_raw)
+                                    + inp.cm[i][j] * (1.0 + inp.fatigue_rate * t_i / inp.bud_raw)
+                                    + inp.cm[j][0] * (1.0 + inp.fatigue_rate * t_j / inp.bud_raw);
+                    if (fat_cost > inp.bud_raw) infeasible = true;
+                }
                 double ub = infeasible ? 0.0 : 1.0;
                 x_col[i][j] = add_col(0.0, ub);
             }
@@ -563,6 +573,97 @@ std::vector<std::vector<int>> find_depot_unreachable(const LPModel& model, doubl
     return {bad};  // Treat as one subset to cut
 }
 
+// ── Lifted cover cuts on the budget knapsack ──────────────────────────────
+
+int find_and_add_cover_cuts(LPModel& lp, const Input& inp, int max_covers = 3) {
+    const int n = lp.n;
+    double B = inp.bud_raw;
+    int cuts_added = 0;
+
+    // Collect arc variables with their knapsack weight (base cost) and LP value
+    struct ArcInfo {
+        int col;       // LP column index
+        double weight; // C_ij (knapsack coefficient)
+        double lp_val; // current fractional value
+    };
+    std::vector<ArcInfo> arcs;
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j) {
+            if (lp.x_col[i][j] < 0) continue;
+            double val = lp.prim(lp.x_col[i][j]);
+            if (val < 1e-6) continue;  // skip zero arcs
+            double w = inp.cm[i][j];
+            if (!std::isfinite(w) || w <= 0) continue;
+            arcs.push_back({lp.x_col[i][j], w, val});
+        }
+
+    if (arcs.empty()) return 0;
+
+    // Sort by LP value descending (greedy: pick most-used arcs first)
+    std::sort(arcs.begin(), arcs.end(),
+              [](const ArcInfo& a, const ArcInfo& b) { return a.lp_val > b.lp_val; });
+
+    // Try to find violated covers
+    for (int attempt = 0; attempt < 5 && cuts_added < max_covers; ++attempt) {
+        std::vector<int> cover_cols;
+        double cover_weight = 0.0;
+        double cover_lp_sum = 0.0;
+
+        // Greedy cover construction: add arcs with highest LP value
+        // until total weight exceeds B
+        size_t start = attempt * (arcs.size() / 5);  // vary starting point
+        for (size_t idx = start; idx < arcs.size(); ++idx) {
+            cover_cols.push_back(arcs[idx].col);
+            cover_weight += arcs[idx].weight;
+            cover_lp_sum += arcs[idx].lp_val;
+            if (cover_weight > B) break;
+        }
+
+        if (cover_weight <= B) continue;  // no cover found
+
+        int C_size = static_cast<int>(cover_cols.size());
+
+        // Check if cover inequality is violated: sum of LP values > |C| - 1
+        if (cover_lp_sum <= C_size - 1 + 1e-6) continue;  // not violated
+
+        // Add basic cover inequality: sum_{k in C} x_k <= |C| - 1
+        std::vector<double> coeffs(C_size, 1.0);
+        lp.add_row(-1e30, static_cast<double>(C_size - 1), cover_cols, coeffs);
+        ++cuts_added;
+
+        // Simple sequential lifting for variables NOT in cover
+        // For each non-cover arc with positive LP value, compute lifting coefficient
+        std::set<int> cover_set(cover_cols.begin(), cover_cols.end());
+        double rhs = C_size - 1;
+
+        for (const auto& arc : arcs) {
+            if (cover_set.count(arc.col)) continue;
+            if (arc.lp_val < 0.1) continue;  // only lift significant variables
+
+            // Lifting coefficient: max alpha such that the inequality remains valid
+            // Greedy approximation: alpha = floor(cover_weight - B) / arc.weight
+            // but capped at 1 for binary variables
+            double slack = cover_weight - B;
+            int alpha = std::min(1, static_cast<int>(slack / std::max(arc.weight, 1e-9)));
+            if (alpha <= 0) continue;
+
+            // Add lifted term: extend the last added row
+            // Since we can't modify rows in HiGHS easily, add as a new stronger cut
+            auto lifted_cols = cover_cols;
+            auto lifted_coeffs = std::vector<double>(C_size, 1.0);
+            lifted_cols.push_back(arc.col);
+            lifted_coeffs.push_back(static_cast<double>(alpha));
+            lp.add_row(-1e30, rhs, lifted_cols, lifted_coeffs);
+            ++cuts_added;
+            if (cuts_added >= max_covers) break;
+        }
+    }
+
+    if (cuts_added > 0)
+        std::cerr << "  Added " << cuts_added << " cover cuts\n";
+    return cuts_added;
+}
+
 // ── Route extraction & validation ──────────────────────────────────────────
 
 std::vector<int> extract_route(const LPModel& model, double eps = 0.5) {
@@ -795,6 +896,7 @@ struct Solver {
     double time_limit_s = 900.0;
 
     bool proved_optimal = false;
+    double best_ub = std::numeric_limits<double>::infinity();  // best remaining upper bound
 
     explicit Solver(const Input& i) : inp(i) {
         root.build(inp);
@@ -835,7 +937,20 @@ struct Solver {
             process_node(std::move(node), node_stack);
         }
         proved_optimal = node_stack.empty() && nodes < 10000;
-        std::cerr << "Processed " << nodes << " nodes, best: " << best_pts << " pts\n";
+        // Compute best remaining upper bound from unexplored nodes
+        if (proved_optimal) {
+            best_ub = best_pts;  // gap = 0
+        } else {
+            best_ub = best_pts;
+            std::stack<BNCNode> tmp = node_stack;
+            while (!tmp.empty()) {
+                if (tmp.top().ub > best_ub) best_ub = tmp.top().ub;
+                tmp.pop();
+            }
+        }
+        double gap_pct = best_pts > 0 ? 100.0 * (best_ub - best_pts) / best_pts : 0.0;
+        std::cerr << "Processed " << nodes << " nodes, best: " << best_pts
+                  << " pts, UB: " << best_ub << ", gap: " << gap_pct << "%\n";
     }
 
     void process_node(BNCNode node, std::stack<BNCNode>& node_stack) {
@@ -855,7 +970,10 @@ struct Solver {
             auto subtours = find_subtours(lp);
             auto unreachable = find_depot_unreachable(lp);
             subtours.insert(subtours.end(), unreachable.begin(), unreachable.end());
-            if (subtours.empty()) break;
+
+            int cover_cuts = find_and_add_cover_cuts(lp, inp);
+
+            if (subtours.empty() && cover_cuts == 0) break;
 
             for (const auto& S : subtours)
                 lp.add_sec(S);
@@ -937,6 +1055,8 @@ static void run_map(const std::string& in_path, const std::string& out_path) {
     out << "  \"bnc_sa\": {\"pts\": " << solver.best_pts << ", \"nodes\": " << solver.best_route.size()
         << ", \"elapsed_s\": " << bnc_elapsed
         << ", \"proved_optimal\": " << (solver.proved_optimal ? "true" : "false")
+        << ", \"best_ub\": " << solver.best_ub
+        << ", \"gap_pct\": " << (solver.best_pts > 0 ? 100.0 * (solver.best_ub - solver.best_pts) / solver.best_pts : 0.0)
         << ", \"base_cost\": " << bnc_base
         << ", \"fatigue_cost\": " << bnc_fatigue << ", \"route\": [";
     for (size_t i = 0; i < solver.best_route.size(); ++i) { if (i) out << ", "; out << solver.best_route[i]; }
@@ -950,6 +1070,7 @@ struct MapResult {
     int    sa_nodes, bnc_nodes;
     double sa_s, bnc_s;
     bool   bnc_optimal;
+    double gap_pct;
 };
 
 int main() {
@@ -997,16 +1118,17 @@ int main() {
             r.bnc_nodes = static_cast<int>(json_val(bnc_blk, "nodes"));
             r.bnc_s     = json_val(bnc_blk, "elapsed_s");
             r.bnc_optimal = (bnc_blk.find("\"proved_optimal\": true") != std::string::npos);
+            r.gap_pct = json_val(bnc_blk, "gap_pct");
             results.push_back(r);
         } catch (...) {}
     }
 
     // ── Summary table ──────────────────────────────────────────────────────
     std::cout << "\n";
-    std::cout << "+----------------------+---------------------------+------------------------------------+\n";
-    std::cout << "| Map                  | SA                        | B&C(SA)                            |\n";
-    std::cout << "|                      |  pts  nodes     time      |  pts  nodes     time    optimal?   |\n";
-    std::cout << "+----------------------+---------------------------+------------------------------------+\n";
+    std::cout << "+----------------------+---------------------------+----------------------------------------------+\n";
+    std::cout << "| Map                  | SA                        | B&C(SA)                                      |\n";
+    std::cout << "|                      |  pts  nodes     time      |  pts  nodes     time    optimal?    gap       |\n";
+    std::cout << "+----------------------+---------------------------+----------------------------------------------+\n";
     for (const auto& r : results) {
         std::cout << "| " << std::left  << std::setw(20) << r.name
                   << " | " << std::right << std::setw(5)  << static_cast<int>(r.sa_pts)
@@ -1016,6 +1138,7 @@ int main() {
                   << "  " << std::setw(5) << r.bnc_nodes
                   << "  " << std::setw(7) << r.bnc_s << "s"
                   << "  " << (r.bnc_optimal ? "YES (proven)" : "no  (limit) ")
+                  << "  " << std::setw(5) << std::setprecision(1) << r.gap_pct << "%"
                   << " |\n";
     }
     std::cout << "+----------------------+---------------------------+------------------------------------+\n";

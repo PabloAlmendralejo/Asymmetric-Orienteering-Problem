@@ -389,11 +389,19 @@ where $A = \{(i,j) : i \neq j,\; x_{ij} \text{ exists}\}$.
 The first sum is the base cost; the second sum linearises the fatigue penalty $\sum C_{ij} \cdot \lambda \cdot t_i / B$ via the McCormick variables.
 
 \paragraph{Arc elimination.}
-Arcs that are structurally infeasible are fixed to zero a priori:
+Arcs that are structurally infeasible are fixed to zero a priori.
+An arc $(i,j)$ is eliminated if the base cost alone exceeds the budget:
 \begin{equation}
   x_{ij} = 0 \quad \text{if } C_{ij} + C_{j0} > B \;\text{ or }\; C_{0i} + C_{ij} + C_{j0} > B
   \label{eq:arcelim}
 \end{equation}
+Additionally, we apply fatigue-aware arc elimination.
+Even on the shortest possible path using arc $(i,j)$---the direct route $0 \to i \to j \to 0$---the fatigue-adjusted cost must not exceed the budget:
+\begin{equation}
+  x_{ij} = 0 \quad \text{if } C_{0i} + C_{ij}\!\left(1 + \frac{\lambda\, C_{0i}}{B}\right) + C_{j0}\!\left(1 + \frac{\lambda\,(C_{0i} + C_{ij})}{B}\right) > B
+  \label{eq:arcelim_fatigue}
+\end{equation}
+This eliminates arcs that are feasible under base cost but infeasible once fatigue is accounted for, reducing the LP size without excluding any feasible solution.
 
 \subsection{Subtour Elimination and Connectivity Cuts}
 
@@ -823,7 +831,7 @@ The Dijkstra downsampling ($s = 8$) introduces path approximation error that has
 \section{Conclusion}
 \label{sec:conclusion}
 % ════════════════════════════════════════════════════════════════
-
+ 
 We presented an integrated framework for optimal route planning in orienteering, combining GIS-based cost surface generation with exact combinatorial optimisation.
 The key methodological contributions are: (i)~the combination of ACR, HCR, and Minetti metabolic cost into a single asymmetric cost model; (ii)~IQR-based raster fusion that adapts to terrain characteristics; (iii)~a Branch-and-Cut formulation with McCormick linearisation of cumulative fatigue; and (iv)~computational evidence that Simulated Annealing finds optimal solutions on real-terrain instances.
 
