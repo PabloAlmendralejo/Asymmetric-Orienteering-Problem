@@ -443,17 +443,10 @@ The set of all such nodes is collected into a single subset $S$, and the same fo
 
 This two-phase separation is essential for the asymmetric OP: Kosaraju detects closed subtours on the \emph{directed} fractional graph (standard connected-component algorithms would miss directionality), while the reverse BFS catches ``dangling'' paths that leave the depot but cannot return---a violation pattern that arises frequently with asymmetric costs where the cheapest path from $i$ to $j$ may not have a feasible return.
 
-\paragraph{Lifted cover cuts on the budget knapsack.}
-The fatigue budget constraint (\cref{eq:fatigue_budget}) has the structure of a knapsack inequality: a weighted sum of binary arc variables bounded by $B$.
-When the LP relaxation fractionally activates many expensive arcs that collectively exceed the budget, subtour elimination cuts alone cannot tighten this bound.
-We add lifted cover inequalities: a \emph{cover} $\mathcal{C}$ is a subset of arc variables whose base costs sum to more than $B$, yielding the valid inequality
-\begin{equation}
-  \sum_{k \in \mathcal{C}} x_k \leq |\mathcal{C}| - 1
-  \label{eq:cover}
-\end{equation}
-Covers are found by greedily selecting arcs with the highest LP values until the budget is exceeded, then checking if the inequality is violated.
-Each cover is optionally strengthened via sequential lifting, computing the maximum coefficient for non-cover variables while maintaining validity.
-Up to 3 cover cuts are added per cut-loop iteration alongside the SECs.
+\paragraph{Note on cover cuts.}
+We also investigated lifted cover inequalities on the fatigue budget knapsack (\cref{eq:fatigue_budget}), which has the structure of a weighted sum of binary variables bounded by $B$.
+While cover cuts tightened the LP bound, the per-node overhead of separation and additional LP rows outweighed the pruning benefit on our instances ($n \leq 40$), resulting in a net increase in solve time.
+We therefore omit them from the final solver; they may become beneficial on larger instances where the LP gap is wider.
 
 % ════════════════════════════════════════════════════════════════
 \section{Solution Methods}

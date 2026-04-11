@@ -930,10 +930,7 @@ struct Solver {
             auto subtours = find_subtours(lp);
             auto unreachable = find_depot_unreachable(lp);
             subtours.insert(subtours.end(), unreachable.begin(), unreachable.end());
-
-            int cover_cuts = find_and_add_cover_cuts(lp, inp);
-
-            if (subtours.empty() && cover_cuts == 0) break;
+            if (subtours.empty()) break;
 
             for (const auto& S : subtours)
                 lp.add_sec(S);
