@@ -858,6 +858,8 @@ struct Solver {
 
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
+    int nodes_explored = 0;
+    int nodes_unexplored = 0;
 
     explicit Solver(const Input& i) : inp(i) {
         root.build(inp);
@@ -898,6 +900,8 @@ struct Solver {
             process_node(std::move(node), node_stack);
         }
         proved_optimal = node_stack.empty() && nodes < 10000;
+        nodes_explored = nodes;
+        nodes_unexplored = static_cast<int>(node_stack.size());
         if (proved_optimal) {
             best_ub = best_pts;
         } else {
@@ -909,8 +913,9 @@ struct Solver {
             }
         }
         double gap_pct = best_pts > 0 ? 100.0 * (best_ub - best_pts) / best_pts : 0.0;
-        std::cerr << "Processed " << nodes << " nodes, best: " << best_pts
-                  << " pts, UB: " << best_ub << ", gap: " << gap_pct << "%\n";
+        std::cerr << "Explored: " << nodes_explored << ", Unexplored: " << nodes_unexplored
+                  << ", best: " << best_pts << " pts, UB: " << best_ub
+                  << ", gap: " << gap_pct << "%\n";
     }
 
     void process_node(BNCNode node, std::stack<BNCNode>& node_stack) {
@@ -1014,6 +1019,8 @@ static void run_map(const std::string& in_path, const std::string& out_path) {
         << ", \"proved_optimal\": " << (solver.proved_optimal ? "true" : "false")
         << ", \"best_ub\": " << solver.best_ub
         << ", \"gap_pct\": " << (solver.best_pts > 0 ? 100.0 * (solver.best_ub - solver.best_pts) / solver.best_pts : 0.0)
+        << ", \"nodes_explored\": " << solver.nodes_explored
+        << ", \"nodes_unexplored\": " << solver.nodes_unexplored
         << ", \"base_cost\": " << bnc_base
         << ", \"fatigue_cost\": " << bnc_fatigue << ", \"route\": [";
     for (size_t i = 0; i < solver.best_route.size(); ++i) { if (i) out << ", "; out << solver.best_route[i]; }
