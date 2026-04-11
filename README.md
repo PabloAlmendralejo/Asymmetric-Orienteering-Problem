@@ -41,7 +41,11 @@ The pipeline has two stages:
 │   └── op_bnc_with_highs_torremocha.cpp  # B&C solver (Torremocha)
 ├── paper/
 │   └── orienteering_paper.tex       # LaTeX paper
-├── data/                            # Input data (not tracked in git)
+├── benchmark/
+│   ├── generate_instances.py        # Parameterized instance generator
+│   ├── benchmark_solver.cpp         # Standalone B&C solver for benchmarks
+│   └── README.md
+├── data/                            # Input data (tracked via Git LFS)
 │   ├── torremocha/
 │   │   ├── Torremocha_tiff.tif      # Map image
 │   │   ├── MDT02-WGS84-0730-1-COB2.tif  # DEM
@@ -116,6 +120,26 @@ within the 15-minute time limit.
 
 Input data files (TIF maps, DEMs, OMAP files) are included in the repository
 under `data/torremocha/` and `data/la_muela/`, tracked via Git LFS for large files.
+
+## Benchmark Suite
+
+We provide a parameterized benchmark generator for the asymmetric OP with fatigue.
+To the best of our knowledge, no standard benchmark exists for this problem variant.
+
+```bash
+cd benchmark
+python generate_instances.py --output-dir instances
+# Compile and run:
+benchmark_solver.exe instances
+```
+
+Instances vary across four dimensions:
+- Node count: 20, 30, 40, 50, 75, 100
+- Asymmetry: 0% (symmetric) to 50%
+- Fatigue rate: 0.0 to 0.3
+- Budget tightness: loose, medium, tight
+
+See `benchmark/README.md` for details.
 
 ## Citation
 

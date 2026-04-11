@@ -1,0 +1,233 @@
+[
+  {
+    "n": 20,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 32.2,
+    "budget_tightness": "medium",
+    "seed": 1001,
+    "nn_cost": 3728.8,
+    "total_pts": 620,
+    "filename": "op_input_bench_001_n20_a25_f20_med.json",
+    "name": "bench_001_n20_a25_f20_med"
+  },
+  {
+    "n": 30,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 33.9,
+    "budget_tightness": "medium",
+    "seed": 1002,
+    "nn_cost": 4146.4,
+    "total_pts": 950,
+    "filename": "op_input_bench_002_n30_a25_f20_med.json",
+    "name": "bench_002_n30_a25_f20_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 34.0,
+    "budget_tightness": "medium",
+    "seed": 1003,
+    "nn_cost": 5571.1,
+    "total_pts": 1130,
+    "filename": "op_input_bench_003_n40_a25_f20_med.json",
+    "name": "bench_003_n40_a25_f20_med"
+  },
+  {
+    "n": 50,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 33.6,
+    "budget_tightness": "medium",
+    "seed": 1004,
+    "nn_cost": 6757.6,
+    "total_pts": 1420,
+    "filename": "op_input_bench_004_n50_a25_f20_med.json",
+    "name": "bench_004_n50_a25_f20_med"
+  },
+  {
+    "n": 75,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 32.7,
+    "budget_tightness": "medium",
+    "seed": 1005,
+    "nn_cost": 7230.4,
+    "total_pts": 2200,
+    "filename": "op_input_bench_005_n75_a25_f20_med.json",
+    "name": "bench_005_n75_a25_f20_med"
+  },
+  {
+    "n": 100,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 32.6,
+    "budget_tightness": "medium",
+    "seed": 1006,
+    "nn_cost": 8839.6,
+    "total_pts": 2740,
+    "filename": "op_input_bench_006_n100_a25_f20_med.json",
+    "name": "bench_006_n100_a25_f20_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.0,
+    "actual_asymmetry_pct": 6.8,
+    "budget_tightness": "medium",
+    "seed": 2007,
+    "nn_cost": 5205.4,
+    "total_pts": 1180,
+    "filename": "op_input_bench_007_n40_a00_f20_med.json",
+    "name": "bench_007_n40_a00_f20_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.1,
+    "actual_asymmetry_pct": 13.5,
+    "budget_tightness": "medium",
+    "seed": 2008,
+    "nn_cost": 5061.1,
+    "total_pts": 1170,
+    "filename": "op_input_bench_008_n40_a10_f20_med.json",
+    "name": "bench_008_n40_a10_f20_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 33.2,
+    "budget_tightness": "medium",
+    "seed": 2009,
+    "nn_cost": 5710.9,
+    "total_pts": 1170,
+    "filename": "op_input_bench_009_n40_a25_f20_med.json",
+    "name": "bench_009_n40_a25_f20_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.5,
+    "actual_asymmetry_pct": 68.2,
+    "budget_tightness": "medium",
+    "seed": 2010,
+    "nn_cost": 6347.4,
+    "total_pts": 1040,
+    "filename": "op_input_bench_010_n40_a50_f20_med.json",
+    "name": "bench_010_n40_a50_f20_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 32.4,
+    "budget_tightness": "medium",
+    "seed": 3011,
+    "nn_cost": 5936.9,
+    "total_pts": 1160,
+    "filename": "op_input_bench_011_n40_a25_f00_med.json",
+    "name": "bench_011_n40_a25_f00_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 28.6,
+    "budget_tightness": "medium",
+    "seed": 3012,
+    "nn_cost": 5881.3,
+    "total_pts": 1080,
+    "filename": "op_input_bench_012_n40_a25_f10_med.json",
+    "name": "bench_012_n40_a25_f10_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 32.5,
+    "budget_tightness": "medium",
+    "seed": 3013,
+    "nn_cost": 6531.5,
+    "total_pts": 1050,
+    "filename": "op_input_bench_013_n40_a25_f20_med.json",
+    "name": "bench_013_n40_a25_f20_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 34.6,
+    "budget_tightness": "medium",
+    "seed": 3014,
+    "nn_cost": 5556.4,
+    "total_pts": 1320,
+    "filename": "op_input_bench_014_n40_a25_f30_med.json",
+    "name": "bench_014_n40_a25_f30_med"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 32.4,
+    "budget_tightness": "loose",
+    "seed": 4015,
+    "nn_cost": 5256.7,
+    "total_pts": 1240,
+    "filename": "op_input_bench_015_n40_a25_f20_l.json",
+    "name": "bench_015_n40_a25_f20_l"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 31.5,
+    "budget_tightness": "medium",
+    "seed": 4016,
+    "nn_cost": 5446.3,
+    "total_pts": 1210,
+    "filename": "op_input_bench_016_n40_a25_f20_m.json",
+    "name": "bench_016_n40_a25_f20_m"
+  },
+  {
+    "n": 40,
+    "asymmetry_param": 0.25,
+    "actual_asymmetry_pct": 31.9,
+    "budget_tightness": "tight",
+    "seed": 4017,
+    "nn_cost": 5529.0,
+    "total_pts": 1170,
+    "filename": "op_input_bench_017_n40_a25_f20_t.json",
+    "name": "bench_017_n40_a25_f20_t"
+  },
+  {
+    "n": 20,
+    "asymmetry_param": 0.0,
+    "actual_asymmetry_pct": 6.8,
+    "budget_tightness": "loose",
+    "seed": 5018,
+    "nn_cost": 4200.3,
+    "total_pts": 530,
+    "filename": "op_input_bench_018_symmetric_easy.json",
+    "name": "bench_018_symmetric_easy"
+  },
+  {
+    "n": 100,
+    "asymmetry_param": 0.5,
+    "actual_asymmetry_pct": 68.8,
+    "budget_tightness": "tight",
+    "seed": 5019,
+    "nn_cost": 8419.5,
+    "total_pts": 2920,
+    "filename": "op_input_bench_019_asymmetric_hard.json",
+    "name": "bench_019_asymmetric_hard"
+  },
+  {
+    "n": 50,
+    "asymmetry_param": 0.5,
+    "actual_asymmetry_pct": 59.0,
+    "budget_tightness": "medium",
+    "seed": 5020,
+    "nn_cost": 6412.3,
+    "total_pts": 1470,
+    "filename": "op_input_bench_020_high_asym_no_fatigue.json",
+    "name": "bench_020_high_asym_no_fatigue"
+  },
+  {
+    "n": 50,
+    "asymmetry_param": 0.0,
+    "actual_asymmetry_pct": 6.6,
+    "budget_tightness": "medium",
+    "seed": 5021,
+    "nn_cost": 6057.1,
+    "total_pts": 1470,
+    "filename": "op_input_bench_021_symmetric_high_fatigue.json",
+    "name": "bench_021_symmetric_high_fatigue"
+  }
+]
