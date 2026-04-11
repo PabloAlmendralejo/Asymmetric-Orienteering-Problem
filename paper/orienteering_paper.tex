@@ -485,7 +485,7 @@ The best configuration, used throughout the experiments, is: $T_0 = 100$, $T_{\t
 The number of iterations and restarts are auto-calibrated based on instance size $n$:
 \begin{align}
   N_{\text{iter}} &= \text{clip}(2500n,\; 10000,\; 120000) \\
-  N_{\text{restart}} &= \text{clip}(300/n,\; 4,\; 20)
+  N_{\text{restart}} &= \text{clip}(3000/n,\; 40,\; 200)
 \end{align}
 The rationale is as follows.
 The neighbourhood size grows with $n$: more nodes means more possible insertions, removals, and swaps per iteration, so the search space requires proportionally more iterations to explore.

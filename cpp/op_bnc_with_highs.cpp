@@ -827,11 +827,17 @@ std::vector<int> solve_sa(const Input& inp, int n_iterations = 80000,
     return best_route;
 }
 
-std::vector<int> solve_sa_iterated(const Input& inp, int n_restarts = 16,
-                                    int n_iterations = 80000) {
+std::vector<int> solve_sa_iterated(const Input& inp, int n_restarts = -1,
+                                    int n_iterations = -1) {
+    const int n = static_cast<int>(inp.pts.size());
+    if (n_iterations < 0) n_iterations = std::max(10000, std::min(120000, n * 2500));
+    if (n_restarts   < 0) n_restarts   = std::max(40,    std::min(200,    3000 / n));
+    std::cerr << "SA: n=" << n << " iters=" << n_iterations
+              << " restarts=" << n_restarts
+              << " total=" << (long long)n_iterations * n_restarts << "\n";
     std::vector<int> best_route;
     double best_score = 0.0;
-    std::mt19937 seed_rng(std::random_device{}());
+    std::mt19937 seed_rng(42);
     for (int r = 0; r < n_restarts; ++r) {
         auto route = solve_sa(inp, n_iterations, 100.0, 0.1, seed_rng());
         double score = rpts(inp.pts, route);
