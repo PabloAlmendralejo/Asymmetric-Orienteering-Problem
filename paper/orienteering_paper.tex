@@ -352,6 +352,9 @@ Each visited node has exactly one incoming and one outgoing arc:
 The depot is always visited: $y_0 = 1$, $t_0 = 0$.
 
 \paragraph{Time propagation (MTZ-type).}
+We adopt Miller--Tucker--Zemlin (MTZ) constraints for subtour elimination and time tracking.
+While flow-based formulations (single-commodity or multi-commodity flow) are known to provide tighter LP relaxations for routing problems, MTZ was chosen because it directly provides arrival-time variables $t_i$ at each node.
+These variables are essential for the fatigue model: the bilinear term $t_i \cdot x_{ij}$ in the fatigue budget (\cref{eq:fatigue_budget}) requires explicit arrival times, which flow-based formulations do not provide without additional reconstruction.
 For each arc $(i,j)$ with $j \neq 0$:
 \begin{equation}
   t_j \geq t_i + C_{ij} - M_{ij}(1 - x_{ij})
