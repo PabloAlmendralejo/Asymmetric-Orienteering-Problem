@@ -435,6 +435,18 @@ The set of all such nodes is collected into a single subset $S$, and the same fo
 
 This two-phase separation is essential for the asymmetric OP: Kosaraju detects closed subtours on the \emph{directed} fractional graph (standard connected-component algorithms would miss directionality), while the reverse BFS catches ``dangling'' paths that leave the depot but cannot return---a violation pattern that arises frequently with asymmetric costs where the cheapest path from $i$ to $j$ may not have a feasible return.
 
+\paragraph{Lifted cover cuts on the budget knapsack.}
+The fatigue budget constraint (\cref{eq:fatigue_budget}) has the structure of a knapsack inequality: a weighted sum of binary arc variables bounded by $B$.
+When the LP relaxation fractionally activates many expensive arcs that collectively exceed the budget, subtour elimination cuts alone cannot tighten this bound.
+We add lifted cover inequalities: a \emph{cover} $\mathcal{C}$ is a subset of arc variables whose base costs sum to more than $B$, yielding the valid inequality
+\begin{equation}
+  \sum_{k \in \mathcal{C}} x_k \leq |\mathcal{C}| - 1
+  \label{eq:cover}
+\end{equation}
+Covers are found by greedily selecting arcs with the highest LP values until the budget is exceeded, then checking if the inequality is violated.
+Each cover is optionally strengthened via sequential lifting, computing the maximum coefficient for non-cover variables while maintaining validity.
+Up to 3 cover cuts are added per cut-loop iteration alongside the SECs.
+
 % ════════════════════════════════════════════════════════════════
 \section{Solution Methods}
 \label{sec:methods}
@@ -818,7 +830,7 @@ The key methodological contributions are: (i)~the combination of ACR, HCR, and M
 Future work includes validation against real GPS data, extension to multi-day events, and integration of weather and time-of-day effects on terrain traversability.
 
 \paragraph{Reproducibility.}
-The source code, benchmark instances (14 JSON files with asymmetric cost matrices and proven optimal solutions), and supplementary data are publicly available at \url{https://github.com/PabloAlmendralejo/Orienteering-Problem}.
+The source code, benchmark instances (14 JSON files with asymmetric cost matrices and proven optimal solutions), and supplementary data are publicly available at \url{https://github.com/PabloAlmendralejo/Orienteering-Problem/tree/main}.
 To the best of our knowledge, no benchmark instances exist for the asymmetric OP with terrain-based costs and fatigue; we release ours to facilitate future comparison.
 
 % ════════════════════════════════════════════════════════════════
