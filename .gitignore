@@ -1,19 +1,24 @@
-# Data files (large, not tracked)
-data/
-*.tif
-*.omap
-*.npz
-
 # Python
 __pycache__/
 *.pyc
 *.pyo
 .numba_cache/
 
-# Output
-*.png
-*.jpg
+# Cache files
+*.npz
+
+# C++ build artifacts
+*.obj
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Output / logs
 op_output_*.json
+*.txt
 
 # IDE
 .vscode/
