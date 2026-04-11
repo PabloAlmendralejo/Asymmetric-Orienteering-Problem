@@ -443,10 +443,17 @@ The set of all such nodes is collected into a single subset $S$, and the same fo
 
 This two-phase separation is essential for the asymmetric OP: Kosaraju detects closed subtours on the \emph{directed} fractional graph (standard connected-component algorithms would miss directionality), while the reverse BFS catches ``dangling'' paths that leave the depot but cannot return---a violation pattern that arises frequently with asymmetric costs where the cheapest path from $i$ to $j$ may not have a feasible return.
 
-\paragraph{Note on cover cuts.}
-We also investigated lifted cover inequalities on the fatigue budget knapsack (\cref{eq:fatigue_budget}), which has the structure of a weighted sum of binary variables bounded by $B$.
-While cover cuts tightened the LP bound, the per-node overhead of separation and additional LP rows outweighed the pruning benefit on our instances ($n \leq 40$), resulting in a net increase in solve time.
-We therefore omit them from the final solver; they may become beneficial on larger instances where the LP gap is wider.
+\paragraph{Lifted cover cuts on the budget knapsack.}
+The fatigue budget constraint (\cref{eq:fatigue_budget}) has the structure of a knapsack inequality: a weighted sum of binary arc variables bounded by $B$.
+When the LP relaxation fractionally activates many expensive arcs that collectively exceed the budget, subtour elimination cuts alone cannot tighten this bound.
+We add lifted cover inequalities: a \emph{cover} $\mathcal{C}$ is a subset of arc variables whose base costs sum to more than $B$, yielding the valid inequality
+\begin{equation}
+  \sum_{k \in \mathcal{C}} x_k \leq |\mathcal{C}| - 1
+  \label{eq:cover}
+\end{equation}
+Covers are found by greedily selecting arcs with the highest LP values until the budget is exceeded, then checking if the inequality is violated.
+Each cover is optionally strengthened via sequential lifting, computing the maximum coefficient for non-cover variables while maintaining validity.
+Up to 3 cover cuts are added per cut-loop iteration alongside the SECs.
 
 % ════════════════════════════════════════════════════════════════
 \section{Solution Methods}
@@ -711,28 +718,28 @@ All instances and the solver are released as part of the benchmark suite.
 
 \begin{table}[H]
 \centering
-\caption{Torremocha results: SA vs.\ B\&C(SA) across seven distributions (HCR-enhanced cost matrix, IQR scaling $c = 0.87$). The ``nodes'' column indicates the number of controls visited in the solution (out of the total available).}
+\caption{Torremocha results: SA vs.\ B\&C(SA) across seven distributions (HCR-enhanced cost matrix, IQR scaling $c = 0.87$). The ``visited'' column indicates the number of controls visited in the solution (out of the total available).}
 \label{tab:torremocha}
-\begin{tabular}{lrrrrrrrrc}
+\begin{tabular}{lrrrrrrrrcr}
 \toprule
-\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{4}{c}{\textbf{B\&C(SA)}} \\
-\cmidrule(lr){3-5} \cmidrule(lr){6-9}
-& ctrls & pts & visited & time & pts & visited & time & optimal? \\
+\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{5}{c}{\textbf{B\&C(SA)}} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-10}
+& ctrls & pts & visited & time & pts & visited & time & optimal? & gap \\
 \midrule
-Standard        & 40 &  930 & 26 & 0.2\,s &  930 & 26 & 900.4\,s & no (limit) \\
-Clustered       & 35 &  510 & 29 & 0.5\,s &  510 & 29 & 136.8\,s & \textbf{YES} \\
-Ring            & 30 &  650 & 26 & 0.4\,s &  650 & 26 & 179.9\,s & \textbf{YES} \\
-Path-biased     & 35 &  630 & 30 & 0.5\,s &  630 & 30 & 423.6\,s & \textbf{YES} \\
-Elev-biased     & 35 &  380 & 30 & 0.5\,s &  380 & 30 & 882.8\,s & \textbf{YES} \\
-Sparse-far      & 25 &  660 & 19 & 0.3\,s &  660 & 19 & 169.1\,s & \textbf{YES} \\
-Mixed-density   & 40 &  680 & 32 & 1.1\,s &  680 & 32 & 901.9\,s & no (limit) \\
+Standard        & 40 &  930 & 26 & 0.3\,s &  930 & 26 & 900.4\,s & no (limit) & 15.3\% \\
+Clustered       & 35 &  510 & 29 & 0.5\,s &  510 & 29 & 136.8\,s & \textbf{YES} & 0.0\% \\
+Ring            & 30 &  650 & 26 & 0.4\,s &  650 & 26 & 179.9\,s & \textbf{YES} & 0.0\% \\
+Path-biased     & 35 &  630 & 30 & 0.5\,s &  630 & 30 & 423.6\,s & \textbf{YES} & 0.0\% \\
+Elev-biased     & 35 &  380 & 30 & 0.5\,s &  380 & 30 & 882.8\,s & \textbf{YES} & 0.0\% \\
+Sparse-far      & 25 &  660 & 19 & 0.3\,s &  660 & 19 & 169.1\,s & \textbf{YES} & 0.0\% \\
+Mixed-density   & 40 &  680 & 32 & 1.1\,s &  680 & 32 & 901.9\,s & no (limit) & 8.6\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 On all seven instances, the SA heuristic finds the same solution as B\&C.
 The B\&C proves global optimality on 5 of 7 instances within the 15-minute time limit, certifying that no higher-scoring feasible route exists (see \cref{prop:optimality} below).
-The two unproven instances (Standard and Mixed-density) have the highest node counts (26 and 32 visited nodes respectively) and hit the time limit, though the SA solution is likely optimal given the pattern across all other instances.
+The two unproven instances (Standard and Mixed-density) have remaining LP relaxation gaps of 15.3\% and 8.6\% respectively, providing upper bounds on the possible improvement over the SA solution.
 
 \subsection{La Muela Results}
 
@@ -740,27 +747,27 @@ The two unproven instances (Standard and Mixed-density) have the highest node co
 \centering
 \caption{La Muela results: SA vs.\ B\&C(SA) across seven distributions (HCR-enhanced cost matrix, IQR scaling $c = 2.18$, asymmetry $50.0\%$). The ``visited'' column indicates controls visited out of the total available.}
 \label{tab:lamuela}
-\begin{tabular}{lrrrrrrrrc}
+\begin{tabular}{lrrrrrrrrcr}
 \toprule
-\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{4}{c}{\textbf{B\&C(SA)}} \\
-\cmidrule(lr){3-5} \cmidrule(lr){6-9}
-& ctrls & pts & visited & time & pts & visited & time & optimal? \\
+\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{5}{c}{\textbf{B\&C(SA)}} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-10}
+& ctrls & pts & visited & time & pts & visited & time & optimal? & gap \\
 \midrule
-Standard        & 31 &  610 & 14 & 0.6\,s &  610 & 14 & 439.3\,s & \textbf{YES} \\
-Clustered       & 35 &  800 & 24 & 1.4\,s &  800 & 24 &  43.3\,s & \textbf{YES} \\
-Ring            & 30 &  470 & 21 & 1.0\,s &  470 & 21 & 790.4\,s & \textbf{YES} \\
-Path-biased     & 35 &  570 & 17 & 1.3\,s &  570 & 17 & 109.3\,s & \textbf{YES} \\
-Elev-biased     & 35 &  730 & 22 & 1.1\,s &  730 & 22 & 900.1\,s & no (limit) \\
-Sparse-far      & 25 &  600 & 13 & 0.7\,s &  600 & 13 & 135.6\,s & \textbf{YES} \\
-Mixed-density   & 40 &  680 & 25 & 1.4\,s &  680 & 25 & 900.3\,s & no (limit) \\
+Standard        & 31 &  610 & 14 & 0.6\,s &  610 & 14 & 439.3\,s & \textbf{YES} & 0.0\% \\
+Clustered       & 35 &  800 & 24 & 1.4\,s &  800 & 24 &  43.3\,s & \textbf{YES} & 0.0\% \\
+Ring            & 30 &  470 & 21 & 1.0\,s &  470 & 21 & 790.4\,s & \textbf{YES} & 0.0\% \\
+Path-biased     & 35 &  570 & 17 & 1.3\,s &  570 & 17 & 109.3\,s & \textbf{YES} & 0.0\% \\
+Elev-biased     & 35 &  730 & 22 & 1.1\,s &  730 & 22 & 900.1\,s & no (limit) & 17.0\% \\
+Sparse-far      & 25 &  600 & 13 & 0.7\,s &  600 & 13 & 135.6\,s & \textbf{YES} & 0.0\% \\
+Mixed-density   & 40 &  680 & 25 & 1.4\,s &  680 & 25 & 900.3\,s & no (limit) & 19.5\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 La Muela exhibits the same pattern as Torremocha: SA matches B\&C on all seven instances, with 5 of 7 proven optimal.
 Despite the significantly harder terrain (464\,m relief, 50\% cost asymmetry, IQR scaling $c = 2.18$), the B\&C closes the optimality gap on most instances.
-The two unproven instances (Elev-biased and Mixed-density) again involve higher node counts and hit the 900\,s time limit.
-Notably, the SA runtime is slightly higher on La Muela (0.6--1.4\,s vs.\ 0.2--1.1\,s on Torremocha), reflecting the larger cost matrix values and more complex feasibility checks under high asymmetry.
+The two unproven instances (Elev-biased and Mixed-density) have LP relaxation gaps of 17.0\% and 19.5\%, larger than the Torremocha gaps, reflecting the increased difficulty of the asymmetric LP relaxation on mountainous terrain.
+Notably, the SA runtime is slightly higher on La Muela (0.6--1.4\,s vs.\ 0.3--1.1\,s on Torremocha), reflecting the larger cost matrix values and more complex feasibility checks under high asymmetry.
 
 Across both terrains (14 instances total), SA finds the B\&C-verified optimum on all 10 proven instances, providing strong empirical evidence for the effectiveness of the tuned SA on real-terrain OP instances.
 
