@@ -279,12 +279,6 @@ The total fatigue-adjusted route cost for a route $\sigma = (0, v_1, v_2, \ldots
 \end{equation}
 where $T_\ell = \sum_{m=0}^{\ell-1} d_{v_m, v_{m+1}}$ is the cumulative base cost up to leg $\ell$, and $v_0 = v_{k+1} = 0$ (depot).
 
-The effective budget, accounting for average fatigue, is:
-\begin{equation}
-  B_{\text{eff}} = \frac{B}{1 + \lambda/2}
-  \label{eq:bud_eff}
-\end{equation}
-
 % ── 2.6 Cost Matrix ──
 \subsection{Asymmetric Cost Matrix Construction}
 \label{sec:costmatrix}
@@ -514,7 +508,7 @@ Starting from a greedy insertion solution, the SA applies four neighbourhood mov
   \item \textbf{Swap} ($p = 0.20$): exchange a visited node for an unvisited one.
 \end{enumerate}
 
-Moves that violate the effective budget $B_{\text{eff}}$ or the fatigue budget are rejected.
+Moves that violate the fatigue budget ($D^f(\sigma') > B$) are rejected.
 The search terminates early if no improvement is found for $N_{\text{iter}}/5$ consecutive iterations (stagnation detection).
 
 The full procedure, including the iterated multi-restart wrapper, is given in \cref{alg:sa}.
@@ -523,13 +517,13 @@ The full procedure, including the iterated multi-restart wrapper, is given in \c
 \caption{Iterated Simulated Annealing for AOPF}
 \label{alg:sa}
 \begin{algorithmic}[1]
-\Require Cost matrix $\mathbf{C}$, scores $\mathbf{p}$, budgets $B$, $B_{\text{eff}}$, fatigue rate $\lambda$
+\Require Cost matrix $\mathbf{C}$, scores $\mathbf{p}$, budget $B$, fatigue rate $\lambda$
 \Ensure Best route $\sigma^*$
 \State $\sigma^* \gets \emptyset$, $z^* \gets 0$
 \State Compute $N_{\text{iter}} \gets \text{clip}(2500n, 10000, 120000)$
 \State Compute $N_{\text{restart}} \gets \text{clip}(300/n, 4, 20)$
 \For{$r = 1, \ldots, N_{\text{restart}}$}
-  \State $\sigma \gets \textsc{GreedyInsertion}(\mathbf{C}, \mathbf{p}, B_{\text{eff}})$
+  \State $\sigma \gets \textsc{GreedyInsertion}(\mathbf{C}, \mathbf{p}, B)$
   \State $z \gets \sum_{i \in \sigma} p_i$, \; $T \gets T_0$, \; $\rho \gets (T_{\text{end}}/T_0)^{1/N_{\text{iter}}}$, \; $s \gets 0$
   \For{$k = 1, \ldots, N_{\text{iter}}$}
     \If{$s \geq N_{\text{iter}}/5$} \textbf{break} \Comment{Stagnation}
@@ -545,7 +539,7 @@ The full procedure, including the iterated multi-restart wrapper, is given in \c
     \Else
       \State $\sigma' \gets \textsc{Swap}(\sigma)$ \Comment{Exchange visited $\leftrightarrow$ unvisited}
     \EndIf
-    \If{$D^f(\sigma') > B$ \textbf{or} $D(\sigma') > B_{\text{eff}}$}
+    \If{$D^f(\sigma') > B$}
       \State $s \gets s + 1$; \textbf{continue} \Comment{Infeasible move}
     \EndIf
     \State $z' \gets \sum_{i \in \sigma'} p_i$, \; $\Delta \gets z' - z$
