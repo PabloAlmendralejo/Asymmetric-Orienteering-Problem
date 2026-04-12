@@ -463,25 +463,25 @@ Up to 3 cover cuts are added per cut-loop iteration alongside the SECs.
 
 \paragraph{Method selection.}
 The SA metaheuristic was selected after a comparative study on 21 benchmark instances across varying sizes ($n = 20$--$100$), asymmetry levels, and fatigue rates.
-Four methods were evaluated with 10 independent runs per instance (except deterministic Greedy): Greedy Insertion, Genetic Algorithm (GA, population 50, 200 generations), Ant Colony Optimisation (ACO, 30 ants, 100 iterations), and Simulated Annealing (SA, 80{,}000 iterations).
+Four methods were evaluated with equal computational budget (2 seconds per method per instance, 10 independent seeds for stochastic methods): Greedy Insertion (deterministic), Genetic Algorithm (GA, population 50), Ant Colony Optimisation (ACO, 30 ants), and Simulated Annealing (SA).
 
 \begin{table}[H]
 \centering
-\caption{Heuristic comparison: mean gap below SA (\%) across 21 benchmark instances (10 seeds per stochastic method). All differences are statistically significant (Wilcoxon signed-rank, $p < 0.05$).}
+\caption{Heuristic comparison: mean gap below SA (\%) across 21 benchmark instances (equal 2\,s time budget, 10 seeds per stochastic method). All differences are statistically significant (Wilcoxon signed-rank, $p < 0.001$).}
 \label{tab:heuristic_comparison}
 \begin{tabular}{lrrrr}
 \toprule
 \textbf{Method} & \textbf{Mean gap} & \textbf{Std} & \textbf{Min gap} & \textbf{Max gap} \\
 \midrule
-Greedy  & 21.0\% & 9.7\% &  3.7\% & 40.0\% \\
-GA      & 48.4\% & 10.0\% & 29.3\% & 72.1\% \\
-ACO     &  5.7\% & 4.4\% &  0.7\% & 20.9\% \\
-SA      &  ---   & ---   &  ---   & ---    \\
+Greedy  & 23.0\% &  9.4\% &  3.7\% & 40.0\% \\
+GA      & 49.2\% & 11.0\% & 24.6\% & 71.9\% \\
+ACO     &  8.1\% &  4.9\% &  1.3\% & 24.1\% \\
+SA      &  ---   & ---    &  ---   & ---    \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-SA significantly outperforms all three alternatives (Wilcoxon signed-rank test, $n = 21$ instances: SA vs.\ Greedy $z = 4.01$, SA vs.\ GA $z = 4.01$, SA vs.\ ACO $z = 4.01$; all $p < 0.001$).
+SA significantly outperforms all three alternatives under equal time budgets (Wilcoxon signed-rank test, $n = 21$ instances: SA vs.\ Greedy $z = 4.01$, SA vs.\ GA $z = 4.01$, SA vs.\ ACO $z = 4.01$; all $p < 0.001$).
 The identical $z$-scores reflect that SA achieves a higher mean score than each competitor on all 21 instances, yielding the maximum possible rank sum in each case.
 The GA performs worst (48.4\% below SA on average), as crossover on directed routes frequently produces infeasible offspring requiring expensive repair, and the rugged fitness landscape under asymmetric costs degrades convergence.
 ACO is the closest competitor (5.7\% below SA) but its pheromone mechanism weakens on asymmetric instances where edge quality is context-dependent on elapsed time and travel direction---the gap widens to 20.9\% on the hardest instance.
