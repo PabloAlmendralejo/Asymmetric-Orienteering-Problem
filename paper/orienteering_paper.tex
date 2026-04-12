@@ -481,7 +481,8 @@ SA      &  ---   & ---   &  ---   & ---    \\
 \end{tabular}
 \end{table}
 
-SA significantly outperforms all three alternatives (Wilcoxon signed-rank $z = 4.01$, $p < 0.05$ for all pairs).
+SA significantly outperforms all three alternatives (Wilcoxon signed-rank test, $n = 21$ instances: SA vs.\ Greedy $z = 4.01$, SA vs.\ GA $z = 4.01$, SA vs.\ ACO $z = 4.01$; all $p < 0.001$).
+The identical $z$-scores reflect that SA achieves a higher mean score than each competitor on all 21 instances, yielding the maximum possible rank sum in each case.
 The GA performs worst (48.4\% below SA on average), as crossover on directed routes frequently produces infeasible offspring requiring expensive repair, and the rugged fitness landscape under asymmetric costs degrades convergence.
 ACO is the closest competitor (5.7\% below SA) but its pheromone mechanism weakens on asymmetric instances where edge quality is context-dependent on elapsed time and travel direction---the gap widens to 20.9\% on the hardest instance.
 Greedy Insertion (21.0\% below SA) is fast but myopic, committing to locally attractive nodes without ability to backtrack.
@@ -541,7 +542,7 @@ The full procedure, including the iterated multi-restart wrapper, is given in \c
 \Ensure Best route $\sigma^*$
 \State $\sigma^* \gets \emptyset$, $z^* \gets 0$
 \State Compute $N_{\text{iter}} \gets \text{clip}(2500n, 10000, 120000)$
-\State Compute $N_{\text{restart}} \gets \text{clip}(300/n, 4, 20)$
+\State Compute $N_{\text{restart}} \gets \text{clip}(3000/n, 40, 200)$
 \For{$r = 1, \ldots, N_{\text{restart}}$}
   \State $\sigma \gets \textsc{GreedyInsertion}(\mathbf{C}, \mathbf{p}, B)$
   \State $z \gets \sum_{i \in \sigma} p_i$, \; $T \gets T_0$, \; $\rho \gets (T_{\text{end}}/T_0)^{1/N_{\text{iter}}}$, \; $s \gets 0$
@@ -868,7 +869,7 @@ In particular, if the incumbent remains the SA solution $z^*_{\text{SA}}$, then 
 % ════════════════════════════════════════════════════════════════
 
 \paragraph{SA effectiveness.}
-The SA heuristic matches the proven optimum on all four certified instances, suggesting it is highly effective for OP instances of this size ($\sim$30--40 nodes).
+The SA heuristic matches the proven optimum on all 10 certified instances across both terrains, suggesting it is highly effective for OP instances of this size ($n \leq 40$).
 This is consistent with the literature on metaheuristics for the OP \citep{vansteenwegen2011orienteering}.
 
 \paragraph{Cost asymmetry.}
@@ -876,8 +877,9 @@ The 50\% asymmetry on La Muela demonstrates that symmetric OP formulations would
 The Minetti model captures this directionality naturally through the metabolic cost polynomial.
 
 \paragraph{Fatigue linearisation.}
-The McCormick envelope provides a tight relaxation of the bilinear fatigue term.
-The tightened upper bounds $\bar{w}_{ij}$ exploit the structure of the OP (must return to depot) to reduce the relaxation gap.
+The McCormick envelope approximates the bilinear fatigue term $t_i \cdot x_{ij}$, with tightened upper bounds $\bar{w}_{ij}$ that exploit the OP structure (must return to depot).
+However, the benchmark results confirm that the McCormick envelope is the primary source of LP relaxation looseness: the gap increases from 6.6\% without fatigue ($\lambda = 0$) to 24.9\% at $\lambda = 0.3$ (\cref{tab:bench_params}), indicating that the linear outer approximation becomes increasingly loose at higher fatigue rates.
+Tighter bilinear relaxations (e.g., piecewise McCormick or spatial branching on the $t_i$ variables) could substantially improve B\&C performance on high-fatigue instances.
 
 \paragraph{Computational complexity and runtime.}
 The overall framework has three computational bottlenecks, each with distinct scaling behaviour.
