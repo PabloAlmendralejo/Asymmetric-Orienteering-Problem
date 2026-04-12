@@ -1,7 +1,6 @@
 # Optimal Route Planning for Orienteering on Real Terrain
 
-End-to-end framework for solving the Orienteering Problem (OP) on real terrain,
-combining GIS-based cost surface generation with exact Branch-and-Cut optimisation.
+End-to-end framework for solving the Asymmetric Orienteering Problem with Fatigue (AOPF) on real terrain, combining GIS-based cost surface generation with exact Branch-and-Cut optimisation.
 
 ## Overview
 
@@ -34,67 +33,74 @@ The pipeline has two stages:
 │   │   ├── route_optimizer.py       # Greedy + SA route optimization
 │   │   └── control_placement.py     # Control point generation (7 strategies)
 │   └── config/
-│       ├── torremocha.py            # Torremocha-specific settings
-│       └── la_muela.py             # La Muela-specific settings
+│       ├── torremocha.py
+│       └── la_muela.py
 ├── cpp/
-│   ├── op_bnc_with_highs.cpp        # B&C solver (La Muela / generic)
+│   ├── op_bnc_with_highs.cpp             # B&C solver (generic / La Muela)
 │   └── op_bnc_with_highs_torremocha.cpp  # B&C solver (Torremocha)
-├── paper/
-│   └── orienteering_paper.tex       # LaTeX paper
 ├── benchmark/
 │   ├── generate_instances.py        # Parameterized instance generator
 │   ├── benchmark_solver.cpp         # Standalone B&C solver for benchmarks
+│   ├── compare_heuristics.cpp       # Greedy / GA / ACO / SA comparison
 │   └── README.md
-├── data/                            # Input data (tracked via Git LFS)
+├── visualization/
+│   └── visualize_results.py         # Map, cost surfaces, routes, hillshade
+├── paper/
+│   └── orienteering_paper.tex       # LaTeX paper
+├── data/                            # Input terrain data (Git LFS)
 │   ├── torremocha/
-│   │   ├── Torremocha_tiff.tif      # Map image
-│   │   ├── MDT02-WGS84-0730-1-COB2.tif  # DEM
-│   │   └── torremocha_omap.omap     # Orienteering map (OMAP XML)
 │   └── la_muela/
-│       ├── La_muela_tiff.tif
-│       ├── MDT02_candelario_merged.tif
-│       └── LAMUELA.omap
 └── .gitignore
 ```
 
 ## Setup
 
-### Python dependencies
+### Python
 ```bash
 cd python
 pip install -r requirements.txt
 ```
 
-### C++ dependencies
+### C++ (Branch-and-Cut solver)
 - MSVC or GCC with C++20 support
 - [HiGHS](https://highs.dev/) LP solver library
 
 ## Usage
 
-### Full pipeline (preprocessing + optimization + JSON export)
+### Full pipeline
 ```bash
 cd python
 
-# First run — preprocesses raw files into terrain cache:
+# First run (preprocessing from raw files):
 python run_pipeline.py torremocha --preprocess
 
-# Subsequent runs — uses cached .npz (faster):
+# Subsequent runs (uses cached .npz):
 python run_pipeline.py torremocha
 
 # La Muela:
 python run_pipeline.py la_muela --preprocess
 ```
 
-### C++ Branch-and-Cut solver
+### C++ solver
 ```bash
-# Compile (Windows/MSVC example):
+# Compile (Windows/MSVC):
 cl.exe /O2 /std:c++20 /EHsc op_bnc_with_highs_torremocha.cpp ^
-  /I<highs_include_path> /link /LIBPATH:<highs_lib_path> highs.lib ^
-  /out:op_bnc_with_highs_torremocha.exe
+  /I<highs_include> /link /LIBPATH:<highs_lib> highs.lib ^
+  /out:solver.exe
 
-# Run (from directory containing op_input_*.json files):
-op_bnc_with_highs_torremocha.exe
+# Run (from directory with op_input_*.json files):
+solver.exe
 ```
+
+### Visualization
+```bash
+cd visualization
+python visualize_results.py torremocha --output-dir figures/
+python visualize_results.py la_muela --output-dir figures/
+```
+
+Generates: map overview, cost surface panels (ACR/HCR/combined/elevation/slope),
+hillshade, directional asymmetry heatmap, and route overlay with A* traced paths.
 
 ## Study Areas
 
@@ -112,35 +118,60 @@ op_bnc_with_highs_torremocha.exe
 
 ## Key Results
 
-Across 14 instances (7 per terrain), the Simulated Annealing heuristic matches
-the Branch-and-Cut optimum on all 10 instances where optimality is proven
-within the 15-minute time limit.
+### Real terrain instances
+Across 14 instances (7 per terrain), SA matches the B&C optimum on all 10
+proven instances. LP relaxation gaps on unproven instances range from 4.2%
+to 19.5%.
 
-## Data
+### Heuristic comparison
+SA significantly outperforms Greedy (21% gap), GA (48% gap), and ACO (5.7% gap)
+across 21 benchmark instances (Wilcoxon signed-rank p < 0.05 for all pairs).
 
-Input data files (TIF maps, DEMs, OMAP files) are included in the repository
-under `data/torremocha/` and `data/la_muela/`, tracked via Git LFS for large files.
+### Benchmark scaling
+The B&C proves optimality for n ≤ 30 within 15 minutes. At n ≥ 40, gaps range
+from 7–25% depending on asymmetry and fatigue rate. Higher fatigue rates
+increase the LP gap due to McCormick relaxation looseness.
 
 ## Benchmark Suite
 
-We provide a parameterized benchmark generator for the asymmetric OP with fatigue.
-To the best of our knowledge, no standard benchmark exists for this problem variant.
+Parameterized instances for the asymmetric OP with fatigue — the first
+benchmark set for this problem variant.
 
 ```bash
 cd benchmark
 python generate_instances.py --output-dir instances
-# Compile and run:
+
+# Compile and run B&C solver:
 benchmark_solver.exe instances
+
+# Heuristic comparison (no HiGHS needed):
+compare_heuristics.exe instances
 ```
 
-Instances vary across four dimensions:
+Instances vary across:
 - Node count: 20, 30, 40, 50, 75, 100
-- Asymmetry: 0% (symmetric) to 50%
+- Asymmetry: 0% to 50%
 - Fatigue rate: 0.0 to 0.3
 - Budget tightness: loose, medium, tight
 
-See `benchmark/README.md` for details.
+## B&C Solver Features
+
+- MTZ time propagation with tightened big-M constants
+- McCormick linearisation of bilinear fatigue term
+- Directed subtour elimination (Kosaraju SCC)
+- Depot-unreachable detection (reverse BFS)
+- Lifted cover cuts on fatigue budget knapsack
+- Fatigue-aware arc elimination
+- LP gap tracking and explored/unexplored node counts
+- Deterministic SA with 10x restarts for robust warm starts
+
+## Data
+
+Input terrain data (TIF maps, DEMs, OMAP files) are included under
+`data/torremocha/` and `data/la_muela/`, tracked via Git LFS.
 
 ## Citation
 
 See `paper/orienteering_paper.tex` for the full methodology and results.
+
+Repository: [github.com/PabloAlmendralejo/Orienteering-Problem](https://github.com/PabloAlmendralejo/Orienteering-Problem)
