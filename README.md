@@ -45,16 +45,6 @@ The pipeline has two stages:
 │   ├── benchmark_solver.cpp         # Standalone B&C solver for benchmarks
 │   ├── compare_heuristics.cpp       # Greedy / GA / ACO / SA comparison
 │   └── README.md
-<<<<<<< HEAD
-├── visualization/
-│   └── visualize_results.py         # Map, cost surfaces, routes, hillshade
-=======
-<<<<<<< HEAD
-├── visualization/
-│   └── visualize_results.py         # Map, cost surfaces, routes, hillshade
-=======
->>>>>>> b3cb976 (Update README with full project documentation)
->>>>>>> 96a5f4d (Update README with full project documentation)
 ├── paper/
 │   └── orienteering_paper.tex       # LaTeX paper
 ├── data/                            # Input terrain data (Git LFS)
@@ -104,15 +94,7 @@ solver.exe
 
 ### Visualization
 ```bash
-<<<<<<< HEAD
-cd visualization
-=======
-<<<<<<< HEAD
-cd visualization
-=======
 cd python/visualization
->>>>>>> b3cb976 (Update README with full project documentation)
->>>>>>> 96a5f4d (Update README with full project documentation)
 python visualize_results.py torremocha --output-dir figures/
 python visualize_results.py la_muela --output-dir figures/
 ```
