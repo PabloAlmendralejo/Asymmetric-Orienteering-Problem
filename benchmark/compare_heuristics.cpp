@@ -21,6 +21,7 @@
 #include <functional>
 #include <limits>
 #include <set>
+#include <chrono>
 
 // ── JSON parser (minimal) ──
 static std::string read_file(const std::string& path) {
@@ -100,7 +101,7 @@ static double rpts(const std::vector<double>& pts, const std::vector<int>& route
     double s=0; for(int v:route) s+=pts[v]; return s;
 }
 
-// ── 1. Greedy Insertion ──
+// ── 1. Greedy Insertion (deterministic, no time budget needed) ──
 std::vector<int> solve_greedy(const Input& inp) {
     int n = (int)inp.pts.size();
     std::vector<bool> vis(n, false); vis[0]=true;
@@ -112,7 +113,6 @@ std::vector<int> solve_greedy(const Input& inp) {
             if(vis[j]) continue;
             double go=inp.cm[cur][j], back=inp.cm[j][0];
             if(!std::isfinite(go)||!std::isfinite(back)) continue;
-            // Quick feasibility: try adding j
             auto trial = route; trial.push_back(j);
             if(rcost_fatigue(inp.cm, trial, inp.bud_raw, inp.fatigue_rate) > inp.bud_raw) continue;
             double ratio=inp.pts[j]/std::max(go,1e-9);
@@ -124,14 +124,17 @@ std::vector<int> solve_greedy(const Input& inp) {
     return route;
 }
 
-// ── 2. Genetic Algorithm ──
-std::vector<int> solve_ga(const Input& inp, int pop_size=50, int generations=200, unsigned seed=42) {
+// ── 2. Genetic Algorithm (time-budgeted) ──
+std::vector<int> solve_ga(const Input& inp, double time_limit_s=2.0, unsigned seed=42) {
     int n=(int)inp.pts.size();
     std::mt19937 rng(seed);
     auto randu=[&](){return std::uniform_real_distribution<double>(0,1)(rng);};
     auto randi=[&](int lo,int hi){return std::uniform_int_distribution<int>(lo,hi)(rng);};
+    int pop_size=50;
+    auto t_start = std::chrono::steady_clock::now();
+    auto elapsed = [&](){return std::chrono::duration<double>(std::chrono::steady_clock::now()-t_start).count();};
 
-    // Initialize population with random subsets
+    // Initialize population
     std::vector<std::vector<int>> pop;
     for (int p=0;p<pop_size;++p) {
         std::vector<int> route;
@@ -145,89 +148,72 @@ std::vector<int> solve_ga(const Input& inp, int pop_size=50, int generations=200
         }
         pop.push_back(route);
     }
-
     auto fitness=[&](const std::vector<int>& r)->double{return rpts(inp.pts,r);};
 
-    for(int gen=0;gen<generations;++gen) {
-        // Sort by fitness
+    while(elapsed()<time_limit_s) {
         std::sort(pop.begin(),pop.end(),[&](auto&a,auto&b){return fitness(a)>fitness(b);});
-
-        // Elitism: keep top 10%
         int elite=std::max(2,pop_size/10);
         std::vector<std::vector<int>> next_pop(pop.begin(),pop.begin()+elite);
-
         while((int)next_pop.size()<pop_size) {
-            // Tournament selection
-            int i1=randi(0,pop_size/2), i2=randi(0,pop_size/2);
+            int i1=randi(0,pop_size/2-1), i2=randi(0,pop_size/2-1);
             auto& p1=pop[std::min(i1,i2)];
-            int i3=randi(0,pop_size/2), i4=randi(0,pop_size/2);
+            int i3=randi(0,pop_size/2-1), i4=randi(0,pop_size/2-1);
             auto& p2=pop[std::min(i3,i4)];
-
-            // Crossover: take nodes from p1, fill gaps from p2
             std::set<int> used;
             std::vector<int> child;
             int cut=p1.empty()?0:randi(0,(int)p1.size()-1);
             for(int k=0;k<=cut&&k<(int)p1.size();++k){child.push_back(p1[k]);used.insert(p1[k]);}
             for(int v:p2) if(!used.count(v)) child.push_back(v);
-
-            // Repair: remove nodes until feasible
             while(!child.empty()&&rcost_fatigue(inp.cm,child,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw) {
                 int worst=0; double wv=inp.pts[child[0]];
                 for(int k=1;k<(int)child.size();++k)
                     if(inp.pts[child[k]]<wv){wv=inp.pts[child[k]];worst=k;}
                 child.erase(child.begin()+worst);
             }
-
-            // Mutation: swap two random positions
             if(child.size()>=2&&randu()<0.3) {
                 int a=randi(0,(int)child.size()-1), b=randi(0,(int)child.size()-1);
                 std::swap(child[a],child[b]);
                 if(rcost_fatigue(inp.cm,child,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw)
-                    std::swap(child[a],child[b]); // revert if infeasible
+                    std::swap(child[a],child[b]);
             }
             next_pop.push_back(child);
         }
         pop=next_pop;
     }
-
     std::sort(pop.begin(),pop.end(),[&](auto&a,auto&b){return fitness(a)>fitness(b);});
     return pop[0];
 }
 
-// ── 3. Ant Colony Optimization ──
-std::vector<int> solve_aco(const Input& inp, int n_ants=30, int iterations=100, unsigned seed=42) {
+// ── 3. Ant Colony Optimization (time-budgeted) ──
+std::vector<int> solve_aco(const Input& inp, double time_limit_s=2.0, unsigned seed=42) {
     int n=(int)inp.pts.size();
     std::mt19937 rng(seed);
     auto randu=[&](){return std::uniform_real_distribution<double>(0,1)(rng);};
+    auto t_start = std::chrono::steady_clock::now();
+    auto elapsed = [&](){return std::chrono::duration<double>(std::chrono::steady_clock::now()-t_start).count();};
+    int n_ants=30;
 
-    // Pheromone matrix
     std::vector<std::vector<double>> tau(n, std::vector<double>(n, 1.0));
     double alpha=1.0, beta=2.0, rho=0.1;
     std::vector<int> best_route;
     double best_score=0;
 
-    for(int iter=0;iter<iterations;++iter) {
+    while(elapsed()<time_limit_s) {
         std::vector<std::vector<int>> ant_routes(n_ants);
         std::vector<double> ant_scores(n_ants,0);
-
         for(int a=0;a<n_ants;++a) {
             std::vector<bool> vis(n,false); vis[0]=true;
-            std::vector<int> route;
-            int cur=0;
+            std::vector<int> route; int cur=0;
             while(true) {
-                // Compute probabilities
-                std::vector<std::pair<int,double>> candidates;
-                double total=0;
+                std::vector<std::pair<int,double>> candidates; double total=0;
                 for(int j=1;j<n;++j) {
                     if(vis[j]||!std::isfinite(inp.cm[cur][j])) continue;
                     auto trial=route; trial.push_back(j);
                     if(rcost_fatigue(inp.cm,trial,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw) continue;
                     double attract=std::pow(tau[cur][j],alpha)*std::pow(inp.pts[j]/std::max(inp.cm[cur][j],1e-9),beta);
-                    candidates.push_back({j,attract});
-                    total+=attract;
+                    candidates.push_back({j,attract}); total+=attract;
                 }
                 if(candidates.empty()) break;
-                // Roulette wheel
                 double r=randu()*total, cum=0;
                 int chosen=candidates.back().first;
                 for(auto&[j,p]:candidates){cum+=p;if(cum>=r){chosen=j;break;}}
@@ -237,10 +223,7 @@ std::vector<int> solve_aco(const Input& inp, int n_ants=30, int iterations=100, 
             ant_scores[a]=rpts(inp.pts,route);
             if(ant_scores[a]>best_score){best_score=ant_scores[a];best_route=route;}
         }
-
-        // Evaporate
         for(auto&row:tau) for(auto&v:row) v*=(1.0-rho);
-        // Deposit
         for(int a=0;a<n_ants;++a) {
             if(ant_scores[a]<=0) continue;
             double deposit=ant_scores[a]/100.0;
@@ -255,27 +238,29 @@ std::vector<int> solve_aco(const Input& inp, int n_ants=30, int iterations=100, 
     return best_route;
 }
 
-// ── 4. Simulated Annealing ──
-std::vector<int> solve_sa(const Input& inp, int n_iters=80000, double T0=100, double Tend=0.1, unsigned seed=42) {
+// ── 4. Simulated Annealing (time-budgeted) ──
+std::vector<int> solve_sa(const Input& inp, double time_limit_s=2.0, unsigned seed=42) {
     int n=(int)inp.pts.size();
     std::mt19937 rng(seed);
     auto randu=[&](){return std::uniform_real_distribution<double>(0,1)(rng);};
     auto randi=[&](int lo,int hi){return std::uniform_int_distribution<int>(lo,hi)(rng);};
+    auto t_start = std::chrono::steady_clock::now();
+    auto elapsed = [&](){return std::chrono::duration<double>(std::chrono::steady_clock::now()-t_start).count();};
 
-    // Start from greedy
     auto route=solve_greedy(inp);
     std::vector<bool> vis(n,false); vis[0]=true;
     for(int v:route) vis[v]=true;
 
     auto best_route=route;
     double best_score=rpts(inp.pts,route), cur_score=best_score;
-    double temp=T0, decay=std::pow(Tend/T0,1.0/std::max(n_iters,1));
+    double temp=100.0;
 
-    for(int it=0;it<n_iters;++it) {
-        temp*=decay;
+    while(elapsed()<time_limit_s) {
+        double frac=elapsed()/time_limit_s;
+        temp=100.0*std::pow(0.001, frac); // geometric cooling over time budget
+
         auto nr=route; auto nv=vis;
         double mv=randu();
-
         if(mv<0.3&&!nr.empty()) {
             int idx=randi(0,(int)nr.size()-1); nv[nr[idx]]=false; nr.erase(nr.begin()+idx);
         } else if(mv<0.6) {
@@ -298,7 +283,6 @@ std::vector<int> solve_sa(const Input& inp, int n_iters=80000, double T0=100, do
             int oi=randi(0,(int)nr.size()-1), old=nr[oi], nw=unv[randi(0,(int)unv.size()-1)];
             nr[oi]=nw; nv[old]=false; nv[nw]=true;
         }
-
         if(rcost_fatigue(inp.cm,nr,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw) continue;
         double ns=rpts(inp.pts,nr), delta=ns-cur_score;
         if(delta>0||(delta<0&&temp>1e-6&&randu()<std::exp(delta/temp))) {
@@ -383,13 +367,14 @@ int main(int argc, char* argv[]) {
         // Greedy (deterministic)
         double greedy_pts = rpts(inp.pts, solve_greedy(inp));
 
-        // GA, ACO, SA: run N_SEEDS times
+        // GA, ACO, SA: run N_SEEDS times with equal time budget
+        double TIME_BUDGET = 2.0;  // seconds per method per run
         std::vector<double> ga_scores, aco_scores, sa_scores;
         for (int s=0; s<N_SEEDS; ++s) {
             unsigned seed = 1000 + s;
-            ga_scores.push_back(rpts(inp.pts, solve_ga(inp, 50, 200, seed)));
-            aco_scores.push_back(rpts(inp.pts, solve_aco(inp, 30, 100, seed)));
-            sa_scores.push_back(rpts(inp.pts, solve_sa(inp, 80000, 100, 0.1, seed)));
+            ga_scores.push_back(rpts(inp.pts, solve_ga(inp, TIME_BUDGET, seed)));
+            aco_scores.push_back(rpts(inp.pts, solve_aco(inp, TIME_BUDGET, seed)));
+            sa_scores.push_back(rpts(inp.pts, solve_sa(inp, TIME_BUDGET, seed)));
         }
 
         auto ga_s = compute_stats(ga_scores);
