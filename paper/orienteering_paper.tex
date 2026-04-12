@@ -714,7 +714,7 @@ We generate a parameterized benchmark suite by varying four dimensions independe
   \item Node count $n \in \{20, 30, 40, 50, 75, 100\}$
   \item Asymmetry parameter $\alpha \in \{0.0, 0.1, 0.25, 0.5\}$, controlling directional cost perturbation
   \item Fatigue rate $\lambda \in \{0.0, 0.1, 0.2, 0.3\}$
-  \item Budget tightness: loose ($\sim$70\% of nearest-neighbour tour), medium ($\sim$50\%), tight ($\sim$30\%)
+  \item Budget tightness: loose ($\sim$70\%), medium ($\sim$50\%), tight ($\sim$30\%), defined as a fraction of the nearest-neighbour tour cost (the greedy cost to visit all $n$ nodes), controlling the proportion of controls that can feasibly be visited
 \end{itemize}
 Additionally, four extreme-case instances test boundary conditions (e.g., symmetric with no fatigue, highly asymmetric with tight budget).
 Nodes are placed uniformly at random in a $1000 \times 1000$\,m domain with the depot at the centre.
