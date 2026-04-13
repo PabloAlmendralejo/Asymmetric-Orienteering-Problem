@@ -106,7 +106,7 @@ hillshade, directional asymmetry heatmap, and route overlay with A* traced paths
 
 | | Torremocha | La Muela |
 |---|---|---|
-| Location | Extremadura, Spain | Salamanca, Spain |
+| Location | Caceres, Spain | Salamanca, Spain |
 | CRS | EPSG:25829 | EPSG:25830 |
 | Grid | 1056 × 1463 | 1376 × 1622 |
 | Resolution | 2.0 m | 2.0 m |
@@ -176,4 +176,4 @@ Input terrain data (TIF maps, DEMs, OMAP files) are included under
 
 See `paper/orienteering_paper.tex` for the full methodology and results.
 
-Repository: [github.com/PabloAlmendralejo/Orienteering-Problem](https://github.com/PabloAlmendralejo/Orienteering-Problem)
+Author: [Pablo Borrego Ramos](pabloalmendralejo@gmail.com)
