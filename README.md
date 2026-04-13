@@ -1,7 +1,5 @@
 # Optimal Route Planning for Orienteering on Real Terrain
 
-**Author:** Pablo Borrego Ramos — pabloalmendralejo@gmail.com
-
 End-to-end framework for solving the Asymmetric Orienteering Problem with Fatigue (AOPF) on real terrain, combining a terrain-aware asymmetric cost model with exact Branch-and-Cut optimisation.
 
 ## Overview
@@ -177,3 +175,7 @@ Input terrain data (TIF maps, DEMs, OMAP files) are included under
 ## Citation
 
 See `paper/orienteering_paper.tex` for the full methodology and results.
+
+## Author
+
+Pablo Borrego Ramos — pabloalmendralejo@gmail.com
