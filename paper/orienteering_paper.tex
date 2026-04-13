@@ -19,6 +19,8 @@
 \usepackage{float}
 \usepackage{multirow}
 
+\providecommand{\doi}[1]{\href{https://doi.org/#1}{\texttt{doi:#1}}}
+
 \newtheorem{definition}{Definition}
 \newtheorem{proposition}{Proposition}
 
@@ -35,12 +37,12 @@ An Integrated Cost Surface and Branch-and-Cut Approach}
 \maketitle
 
 \begin{abstract}
-We present an end-to-end computational framework for solving the Orienteering Problem (OP) on real terrain, integrating geospatial cost surface generation with exact combinatorial optimisation.
+We present an end-to-end computational framework for solving the Orienteering Problem (OP) on real terrain, combining a terrain-aware asymmetric cost model with exact combinatorial optimisation via Branch-and-Cut.
 The cost surface combines three layers: (i)~an Areal Cost Raster (ACR) derived from IOF orienteering map symbols, (ii)~a Hypsometry Cost Raster (HCR) capturing terrain morphometry via the Terrain Ruggedness Index, plan curvature, and slope magnitude, and (iii)~a directional metabolic cost model based on the Minetti polynomial.
 A cumulative fatigue model modulates travel cost as a function of elapsed effort.
 The resulting asymmetric cost matrix feeds a Branch-and-Cut (B\&C) solver that provides provably optimal solutions, warm-started by a Simulated Annealing (SA) metaheuristic.
-We validate the framework on two Spanish terrains---Torremocha (55\,m relief) and La Muela (464\,m relief)---across seven control-point distributions each.
-The SA heuristic matches the B\&C optimum on all instances where optimality is proven, and the B\&C certifies global optimality on 5 of 7 Torremocha instances and 5 of 7 La Muela instances within a 15-minute time limit.
+We validate the framework on two Spanish terrains---Torremocha and La Muela---across seven control-point distributions each.
+The B\&C certifies global optimality on 10 of 14 instances within a 15-minute time limit.
 \end{abstract}
 
 \noindent\textbf{Keywords:} orienteering problem, least-cost path, branch-and-cut, terrain cost surface, Minetti metabolic model, simulated annealing
@@ -72,7 +74,7 @@ The remainder of this paper is organised as follows.
 \Cref{sec:formulation} presents the mathematical formulation.
 \Cref{sec:methods} details the solution methods.
 \Cref{sec:pipeline} outlines the computational pipeline.
-\Cref{sec:experiments} describes the experimental setup, and \cref{sec:results} presents the results.
+\Cref{sec:experiments} describes the experimental setup, and \cref{sec:results} presents the results, including a synthetic benchmark suite for the asymmetric OP with fatigue.
 \Cref{sec:discussion} discusses findings and limitations, and \cref{sec:conclusion} concludes.
 
 % ════════════════════════════════════════════════════════════════
@@ -178,11 +180,13 @@ with $\alpha = 1$, $\beta = 0.5$, $\gamma = 1$ as specified by \citet{ica2021lcp
 To combine ACR and HCR, the HCR must be scaled into ACR's numerical space.
 \citet{ica2021lcp} proposed histogram mode matching: $c = f_{\text{ACR}}(\mu) / f_{\text{HCR}}(\mu)$, where $f(\mu)$ denotes the density at the mode.
 This is sensitive to distribution shape and can produce unstable scaling constants.
+For example, when the ACR distribution is multimodal (due to discrete symbol categories) and the HCR distribution is unimodal and right-skewed, the mode densities $f(\mu)$ can differ by an order of magnitude, yielding scaling constants that vary erratically with small changes in bin width.
 
 We evaluated six scaling methods on both study areas: median ratio, mean ratio, IQR ratio, standard deviation ratio, percentile range matching, and full quantile mapping.
 The median and mean ratios produced excessively large constants ($c > 7$) due to the different distribution shapes of ACR (discrete symbol weights) and HCR (continuous, right-skewed).
 Percentile and quantile mapping over-corrected by forcing HCR to mimic ACR's distribution.
 The IQR ratio was selected for its robustness to outliers and its focus on matching variability rather than central tendency, adapting automatically to terrain characteristics ($c = 0.87$ for Torremocha, $c = 2.18$ for La Muela).
+A straightforward alternative, normalising both rasters to $[0,1]$, was rejected because it would discard the ACR's physically meaningful scale, where cell weights directly encode running speed ratios derived from IOF symbol specifications.
 
 We propose an Interquartile Range (IQR) ratio:
 \begin{equation}
@@ -231,16 +235,17 @@ The cost multiplier relative to flat terrain is:
 where the floor at $0.5$ prevents unrealistic negative costs on steep descents.
 
 During anisotropic Dijkstra pathfinding, the directional slope between adjacent cells $(r_1, c_1) \to (r_2, c_2)$ is computed from the DEM-derived slope gradients.
-Let $g_x = \partial z / \partial x$ and $g_y = \partial z / \partial y$ be the slope gradient components, computed via central finite differences on the DEM and averaged between the source and destination cells:
+At each grid cell, the partial derivatives $\partial z / \partial x$ and $\partial z / \partial y$ are computed via central finite differences on the DEM.
+For a step between two adjacent cells, these derivatives are averaged to obtain a representative gradient at the midpoint:
 \begin{equation}
-  g_x = \tfrac{1}{2}\bigl(g_x^{(r_1,c_1)} + g_x^{(r_2,c_2)}\bigr), \quad
-  g_y = \tfrac{1}{2}\bigl(g_y^{(r_1,c_1)} + g_y^{(r_2,c_2)}\bigr)
+  \bar{g}_x = \tfrac{1}{2}\!\left(\frac{\partial z}{\partial x}\bigg|_{(r_1,c_1)} + \frac{\partial z}{\partial x}\bigg|_{(r_2,c_2)}\right), \quad
+  \bar{g}_y = \tfrac{1}{2}\!\left(\frac{\partial z}{\partial y}\bigg|_{(r_1,c_1)} + \frac{\partial z}{\partial y}\bigg|_{(r_2,c_2)}\right)
   \label{eq:gradavg}
 \end{equation}
 Let $\Delta c = c_2 - c_1$ and $\Delta r = r_2 - r_1$ be the step direction.
 The signed slope gradient along the direction of travel is:
 \begin{equation}
-  i_{12} = \frac{g_x \cdot \Delta c + g_y \cdot \Delta r}{\sqrt{\Delta c^2 + \Delta r^2}}
+  i_{12} = \frac{\bar{g}_x \cdot \Delta c + \bar{g}_y \cdot \Delta r}{\sqrt{\Delta c^2 + \Delta r^2}}
   \label{eq:dirslope}
 \end{equation}
 This projects the terrain gradient onto the movement vector, yielding a positive value for uphill travel and negative for downhill.
@@ -252,7 +257,7 @@ The traversal cost of a single Dijkstra step from cell $(r_1, c_1)$ to an adjace
 where $\text{Cost}_{rc}$ is the combined base cost at cell $(r,c)$ from \cref{eq:combined}, $\phi(i_{12})$ is the Minetti slope factor from \cref{eq:minetti_factor}, and $\|\Delta\| = \sqrt{\Delta c^2 + \Delta r^2}$ is the Euclidean step length between adjacent cells ($\|\Delta\| = 1$ for cardinal moves, $\|\Delta\| = \sqrt{2}$ for diagonal moves in the 8-connected grid).
 The base cost is averaged between the source and destination cells to smooth transitions across terrain boundaries.
 
-This produces an \emph{asymmetric} cost matrix: $d(A \to B) \neq d(B \to A)$ whenever the terrain slope differs in opposite directions.
+This produces an \emph{asymmetric traversal cost: the step cost $d_{12}$ from cell~1 to cell~2 differs from $d_{21}$ in the reverse direction, because the Minetti factor satisfies $\phi(i) \neq \phi(-i)$ for any non-zero slope---ascending a gradient $i > 0$ is more expensive than descending it.}
 
 % ── 2.5 Fatigue ──
 \subsection{Cumulative Fatigue Model}
@@ -288,7 +293,7 @@ Given $n$ control points plus the depot (node~0), the pairwise cost matrix $\mat
 
 For each node $i \in V$, a single-source anisotropic Dijkstra is run on the (optionally downsampled) grid, starting from the grid cell corresponding to node $i$.
 The algorithm explores all 8-connected neighbours using a priority queue, computing the traversal cost to each adjacent cell via \cref{eq:edgecost}.
-Because the Minetti cost function is asymmetric ($\phi(i) \neq \phi(-i)$), ascending and descending the same slope have different costs, producing an asymmetric cost matrix.
+Because each step cost is directional (as described above), the shortest-path cost from node $i$ to node $j$ generally differs from the cost from $j$ to $i$, yielding an asymmetric cost matrix.
 
 The cost matrix entry $C_{ij}$ is then the shortest-path distance from node $i$'s grid cell to node $j$'s grid cell in this directed cost field.
 Running $n+1$ independent Dijkstra computations (one per node) yields the full matrix.
@@ -296,11 +301,10 @@ Cells with base cost $\geq 9.0$ (impassable features) are treated as hard barrie
 
 The grid is optionally downsampled by factor $s$, averaging the base cost in $s \times s$ blocks and rescaling node coordinates accordingly.
 This reduces computation time from $O(nHW \log(HW))$ to $O\bigl(n \frac{HW}{s^2} \log \frac{HW}{s^2}\bigr)$ at the cost of path resolution.
-With $s = 8$ and Numba JIT compilation, the full cost matrix for 41 nodes on a $1056 \times 1463$ grid computes in under 4 seconds.
 
 The resulting matrix satisfies $C_{ij} \neq C_{ji}$ in general, with asymmetry measured as:
 \begin{equation}
-  A = \frac{\text{mean}_{i \neq j}\, |C_{ij} - C_{ji}|}{\text{mean}_{i \neq j}\, C_{ij}} \times 100\%
+  $\mathcal{A$} = \frac{\text{mean}_{i \neq j}\, |C_{ij} - C_{ji}|}{\text{mean}_{i \neq j}\, C_{ij}} \times 100\%
   \label{eq:asymmetry}
 \end{equation}
 
@@ -365,7 +369,8 @@ where the big-$M$ constant is tightened to:
   M_{ij} = \max\bigl(B - C_{0i} - C_{j0},\; C_{ij}\bigr)
   \label{eq:bigM}
 \end{equation}
-representing the latest feasible arrival at $i$ given that the route must still traverse $i \to j \to 0$.
+The value $B - C_{0i - C_{j0}$ is the maximum time that could have elapsed at node $i$ on any feasible route that still uses arc $(i,j)$ and returns to the depot: the route must spend at least $C_{0i}$ reaching $i$ and $C_{j0}$ returning from $j$, so $t_i \leq B - C_{0i} - C_{j0}$ (we also need $M_{ij} \geq C_{ij}$ to ensure the constraint is non-trivial when $x_{ij} = 0$).
+This is tighter than the standard MTZ constant $M = n$ and reduces the LP relaxation gap.}
 
 \paragraph{McCormick linearisation.}
 The fatigue budget constraint involves the bilinear term $t_i \cdot x_{ij}$.
@@ -376,6 +381,7 @@ Let $\bar{w}_{ij} = \min(B - C_{ij} - C_{j0},\; B - C_{i0})$ be the tightest upp
   w_{ij} &\leq \bar{w}_{ij} \, x_{ij} \label{eq:mc2} \\
   w_{ij} &\leq t_i \label{eq:mc3}
 \end{align}
+Constraint~\eqref{eq:mc1 forces $w_{ij} = t_i$ when $x_{ij} = 1$ (the arc is used); constraint~\eqref{eq:mc2} forces $w_{ij} = 0$ when $x_{ij} = 0$ (the arc is unused); and constraint~\eqref{eq:mc3} ensures $w_{ij}$ never exceeds the arrival time, maintaining the interpretation $w_{ij} \leq t_i$.}
 
 \paragraph{Fatigue budget.}
 The total fatigue-adjusted travel cost must not exceed the budget:
@@ -481,8 +487,7 @@ SA      &  ---   & ---    &  ---   & ---    \\
 \end{tabular}
 \end{table}
 
-SA significantly outperforms all three alternatives under equal time budgets (Wilcoxon signed-rank test, $n = 21$ instances: SA vs.\ Greedy $z = 4.01$, SA vs.\ GA $z = 4.01$, SA vs.\ ACO $z = 4.01$; all $p < 0.001$).
-The identical $z$-scores reflect that SA achieves a higher mean score than each competitor on all 21 instances, yielding the maximum possible rank sum in each case.
+SA significantly outperforms all three alternatives under equal time budgets (Wilcoxon signed-rank test, $n = 21$ instances, all $p < 0.001$; SA achieves a higher mean score than each competitor on all 21 instances).
 The GA performs worst (48.4\% below SA on average), as crossover on directed routes frequently produces infeasible offspring requiring expensive repair, and the rugged fitness landscape under asymmetric costs degrades convergence.
 ACO is the closest competitor (5.7\% below SA) but its pheromone mechanism weakens on asymmetric instances where edge quality is context-dependent on elapsed time and travel direction---the gap widens to 20.9\% on the hardest instance.
 Greedy Insertion (21.0\% below SA) is fast but myopic, committing to locally attractive nodes without ability to backtrack.
@@ -491,7 +496,7 @@ SA's advantage stems from its single-solution trajectory search: it evaluates ea
 The Or-opt and swap moves are particularly effective on asymmetric instances because they directly evaluate the actual cost change of rearranging the visit sequence, naturally accounting for directionality.
 
 \paragraph{Parameter tuning.}
-The SA parameters were fine-tuned via grid search over the same 1{,}000-instance sample.
+The SA parameters were fine-tuned via grid search over a separate set of 1{,000 synthetic instances with randomised control-point distributions across both study areas.}
 The tunable parameters and their search ranges were:
 \begin{itemize}[nosep]
   \item Initial temperature $T_0 \in \{50, 100, 200, 500\}$
@@ -581,6 +586,7 @@ The full procedure, including the iterated multi-restart wrapper, is given in \c
 \label{sec:bnc}
 
 The B\&C solver uses the LP relaxation of the AOPF formulation (\cref{sec:formulation}), solved via the HiGHS dual simplex \citep{huangfu2018highs}.
+HiGHS was chosen as it is open-source, provides a C API suitable for embedding in a custom B\&C loop, and its dual simplex implementation supports efficient warm-starting after cut addition.
 The algorithm proceeds as follows:
 
 \begin{algorithm}[H]
@@ -614,9 +620,9 @@ The algorithm proceeds as follows:
 
 Key implementation details:
 \begin{itemize}[nosep]
-  \item Branching is performed exclusively on the node-visit variables $y_i$, not on arc variables $x_{ij}$.
-        The OP is fundamentally a node selection problem: once the set of visited nodes is fixed, the route structure is determined by the LP and SECs.
-        Branching on $y_i$ directly partitions the solution space along this core decision, whereas branching on $x_{ij}$ would impose weaker restrictions (excluding a single arc, not a node) and require $O(n^2)$ depth instead of $O(n)$.
+  \item Branching is performed on the node-visit variables $y_i$ rather than arc variables $x_{ij$.
+        Setting $y_i = 0$ removes node $i$ from all future solutions in the subtree, eliminating $O(n)$ arc variables at once; setting $y_i = 1$ forces the node to be visited.
+        By contrast, fixing a single $x_{ij}$ only excludes one arc, requiring up to $O(n^2)$ branching decisions to resolve all fractional arcs.}
   \item LP models are deep-copied via \texttt{Highs\_passLp} for thread safety.
   \item Duplicate SECs are tracked via a hash set to avoid redundant cuts.
   \item Maximum branching depth is capped at $D_{\max} = 15$.
@@ -636,7 +642,7 @@ The full pipeline consists of two stages:
   \item Load DTM, compute TRI, PC, SLO $\to$ normalise $\to$ HCR (\cref{eq:hcr}).
   \item Scale HCR via IQR ratio (\cref{eq:iqr}), merge with ACR (\cref{eq:combined}).
   \item Compute directional slopes from DTM.
-  \item Run anisotropic Dijkstra (Numba JIT) from each node with Minetti factors.
+  \item Run anisotropic Dijkstra from each node with Minetti factors.
   \item Export asymmetric cost matrix, scores, and budget as JSON.
 \end{enumerate}
 
@@ -680,6 +686,7 @@ Cost asymmetry & $16.1\%$ & $50.0\%$ \\
 
 Torremocha is a gently undulating terrain in Extremadura, Spain, with moderate forest cover and extensive rock features.
 La Muela is a mountainous area with steep slopes, cliffs, and significant elevation variation.
+Additional study areas are being coordinated with the regional orienteering federation to broaden the validation set.
 
 \subsection{Control Distributions}
 
@@ -704,6 +711,69 @@ Base speed: 2.5\,m/s.
 Dijkstra downsampling: $s = 8$.
 B\&C time limit: 900\,s.
 SA iterations: auto-calibrated per instance.
+These values reflect the typical duration of a middle-distance orienteering race.
+
+% ════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+% ════════════════════════════════════════════════════════════════
+
+\subsection{Torremocha Results}
+
+\begin{table}[H]
+\centering
+\caption{Torremocha results: SA vs.\ B\&C(SA) across seven distributions (HCR-enhanced cost matrix, IQR scaling $c = 0.87$). The ``visited'' column indicates the number of controls visited in the solution (out of the total available).}
+\label{tab:torremocha}
+\begin{tabular}{lrrrrrrrrcr}
+\toprule
+\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{5}{c}{\textbf{B\&C(SA)}} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-10}
+& ctrls & pts & visited & time & pts & visited & time & optimal? & gap \\
+\midrule
+Standard        & 40 &  930 & 26 & 0.3\,s &  930 & 26 & 900.4\,s & no (limit) & 15.3\% \\
+Clustered       & 35 &  510 & 29 & 0.5\,s &  510 & 29 & 136.8\,s & \textbf{YES} & 0.0\% \\
+Ring            & 30 &  650 & 26 & 0.4\,s &  650 & 26 & 179.9\,s & \textbf{YES} & 0.0\% \\
+Path-biased     & 35 &  630 & 30 & 0.5\,s &  630 & 30 & 423.6\,s & \textbf{YES} & 0.0\% \\
+Elev-biased     & 35 &  380 & 30 & 0.5\,s &  380 & 30 & 882.8\,s & \textbf{YES} & 0.0\% \\
+Sparse-far      & 25 &  660 & 19 & 0.3\,s &  660 & 19 & 169.1\,s & \textbf{YES} & 0.0\% \\
+Mixed-density   & 40 &  680 & 32 & 1.1\,s &  680 & 32 & 901.9\,s & no (limit) & 8.6\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On all seven instances, the B\&C incumbent matches the SA warm-start solution.
+The B\&C proves global optimality on 5 of 7 instances within the 15-minute time limit, certifying that no higher-scoring feasible route exists (see \cref{prop:optimality} below).
+The two unproven instances (Standard and Mixed-density) have remaining LP relaxation gaps of 15.3\% and 8.6\% respectively, providing upper bounds on the possible improvement over the SA solution.
+
+\subsection{La Muela Results}
+
+\begin{table}[H]
+\centering
+\caption{La Muela results: SA vs.\ B\&C(SA) across seven distributions (HCR-enhanced cost matrix, IQR scaling $c = 2.18$, asymmetry $50.0\%$).}
+\label{tab:lamuela}
+\begin{tabular}{lrrrrrrrrcr}
+\toprule
+\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{5}{c}{\textbf{B\&C(SA)}} \\
+\cmidrule(lr){3-5} \cmidrule(lr){6-10}
+& ctrls & pts & visited & time & pts & visited & time & optimal? & gap \\
+\midrule
+Standard        & 31 &  610 & 14 & 0.6\,s &  610 & 14 & 439.3\,s & \textbf{YES} & 0.0\% \\
+Clustered       & 35 &  800 & 24 & 1.4\,s &  800 & 24 &  43.3\,s & \textbf{YES} & 0.0\% \\
+Ring            & 30 &  470 & 21 & 1.0\,s &  470 & 21 & 790.4\,s & \textbf{YES} & 0.0\% \\
+Path-biased     & 35 &  570 & 17 & 1.3\,s &  570 & 17 & 109.3\,s & \textbf{YES} & 0.0\% \\
+Elev-biased     & 35 &  730 & 22 & 1.1\,s &  730 & 22 & 900.1\,s & no (limit) & 17.0\% \\
+Sparse-far      & 25 &  600 & 13 & 0.7\,s &  600 & 13 & 135.6\,s & \textbf{YES} & 0.0\% \\
+Mixed-density   & 40 &  680 & 25 & 1.4\,s &  680 & 25 & 900.3\,s & no (limit) & 19.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La Muela exhibits the same pattern as Torremocha: SA matches B\&C on all seven instances, with 5 of 7 proven optimal.
+Despite the significantly harder terrain (464\,m relief, 50\% cost asymmetry, IQR scaling $c = 2.18$), the B\&C closes the optimality gap on most instances.
+The two unproven instances (Elev-biased and Mixed-density) have LP relaxation gaps of 17.0\% and 19.5\%, larger than the Torremocha gaps, reflecting the increased difficulty of the asymmetric LP relaxation on mountainous terrain.
+Notably, the SA runtime is slightly higher on La Muela (0.6--1.4\,s vs.\ 0.3--1.1\,s on Torremocha), reflecting the steeper terrain which produces larger traversal costs and deeper feasibility evaluations per move.
+
+Across both terrains (14 instances total), SA finds the B\&C-verified optimum on all 10 proven instances, providing strong empirical evidence for the effectiveness of the tuned SA on real-terrain OP instances.
 
 \subsection{Synthetic Benchmark Instances}
 \label{sec:benchmark}
@@ -714,7 +784,7 @@ We generate a parameterized benchmark suite by varying four dimensions independe
   \item Node count $n \in \{20, 30, 40, 50, 75, 100\}$
   \item Asymmetry parameter $\alpha \in \{0.0, 0.1, 0.25, 0.5\}$, controlling directional cost perturbation
   \item Fatigue rate $\lambda \in \{0.0, 0.1, 0.2, 0.3\}$
-  \item Budget tightness: loose ($\sim$70\%), medium ($\sim$50\%), tight ($\sim$30\%), defined as a fraction of the nearest-neighbour tour cost (the greedy cost to visit all $n$ nodes), controlling the proportion of controls that can feasibly be visited
+  \item Budget tightness: loose ($\sim$70\%), medium ($\sim$50\%), tight ($\sim$30\%), defined as a fraction of the nearest-neighbour tour cost
 \end{itemize}
 Additionally, four extreme-case instances test boundary conditions (e.g., symmetric with no fatigue, highly asymmetric with tight budget).
 Nodes are placed uniformly at random in a $1000 \times 1000$\,m domain with the depot at the centre.
@@ -770,68 +840,6 @@ First, the B\&C proves optimality for $n \leq 30$ within the time limit but stru
 Second, higher asymmetry widens the LP gap (16.8\% at $\alpha = 0$ to 24.6\% at $\alpha = 0.5$), confirming that asymmetric costs make the LP relaxation looser (\cref{tab:bench_params}).
 Third, fatigue has a pronounced effect on gap quality: without fatigue ($\lambda = 0$) the gap is only 6.6\%, rising to 24.9\% at $\lambda = 0.3$, indicating that the McCormick linearisation introduces significant relaxation looseness at high fatigue rates.
 The hardest instance (asymmetric\_hard: $n = 100$, $\alpha = 0.5$, $\lambda = 0.3$, tight budget) has a 42.8\% gap, while the easiest (symmetric\_easy: $n = 20$, $\alpha = 0$, $\lambda = 0$) solves in under 1 second.
-
-% ════════════════════════════════════════════════════════════════
-\section{Results}
-\label{sec:results}
-% ════════════════════════════════════════════════════════════════
-
-\subsection{Torremocha Results}
-
-\begin{table}[H]
-\centering
-\caption{Torremocha results: SA vs.\ B\&C(SA) across seven distributions (HCR-enhanced cost matrix, IQR scaling $c = 0.87$). The ``visited'' column indicates the number of controls visited in the solution (out of the total available).}
-\label{tab:torremocha}
-\begin{tabular}{lrrrrrrrrcr}
-\toprule
-\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{5}{c}{\textbf{B\&C(SA)}} \\
-\cmidrule(lr){3-5} \cmidrule(lr){6-10}
-& ctrls & pts & visited & time & pts & visited & time & optimal? & gap \\
-\midrule
-Standard        & 40 &  930 & 26 & 0.3\,s &  930 & 26 & 900.4\,s & no (limit) & 15.3\% \\
-Clustered       & 35 &  510 & 29 & 0.5\,s &  510 & 29 & 136.8\,s & \textbf{YES} & 0.0\% \\
-Ring            & 30 &  650 & 26 & 0.4\,s &  650 & 26 & 179.9\,s & \textbf{YES} & 0.0\% \\
-Path-biased     & 35 &  630 & 30 & 0.5\,s &  630 & 30 & 423.6\,s & \textbf{YES} & 0.0\% \\
-Elev-biased     & 35 &  380 & 30 & 0.5\,s &  380 & 30 & 882.8\,s & \textbf{YES} & 0.0\% \\
-Sparse-far      & 25 &  660 & 19 & 0.3\,s &  660 & 19 & 169.1\,s & \textbf{YES} & 0.0\% \\
-Mixed-density   & 40 &  680 & 32 & 1.1\,s &  680 & 32 & 901.9\,s & no (limit) & 8.6\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-On all seven instances, the SA heuristic finds the same solution as B\&C.
-The B\&C proves global optimality on 5 of 7 instances within the 15-minute time limit, certifying that no higher-scoring feasible route exists (see \cref{prop:optimality} below).
-The two unproven instances (Standard and Mixed-density) have remaining LP relaxation gaps of 15.3\% and 8.6\% respectively, providing upper bounds on the possible improvement over the SA solution.
-
-\subsection{La Muela Results}
-
-\begin{table}[H]
-\centering
-\caption{La Muela results: SA vs.\ B\&C(SA) across seven distributions (HCR-enhanced cost matrix, IQR scaling $c = 2.18$, asymmetry $50.0\%$). The ``visited'' column indicates controls visited out of the total available.}
-\label{tab:lamuela}
-\begin{tabular}{lrrrrrrrrcr}
-\toprule
-\textbf{Distribution} & \textbf{Total} & \multicolumn{3}{c}{\textbf{SA}} & \multicolumn{5}{c}{\textbf{B\&C(SA)}} \\
-\cmidrule(lr){3-5} \cmidrule(lr){6-10}
-& ctrls & pts & visited & time & pts & visited & time & optimal? & gap \\
-\midrule
-Standard        & 31 &  610 & 14 & 0.6\,s &  610 & 14 & 439.3\,s & \textbf{YES} & 0.0\% \\
-Clustered       & 35 &  800 & 24 & 1.4\,s &  800 & 24 &  43.3\,s & \textbf{YES} & 0.0\% \\
-Ring            & 30 &  470 & 21 & 1.0\,s &  470 & 21 & 790.4\,s & \textbf{YES} & 0.0\% \\
-Path-biased     & 35 &  570 & 17 & 1.3\,s &  570 & 17 & 109.3\,s & \textbf{YES} & 0.0\% \\
-Elev-biased     & 35 &  730 & 22 & 1.1\,s &  730 & 22 & 900.1\,s & no (limit) & 17.0\% \\
-Sparse-far      & 25 &  600 & 13 & 0.7\,s &  600 & 13 & 135.6\,s & \textbf{YES} & 0.0\% \\
-Mixed-density   & 40 &  680 & 25 & 1.4\,s &  680 & 25 & 900.3\,s & no (limit) & 19.5\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-La Muela exhibits the same pattern as Torremocha: SA matches B\&C on all seven instances, with 5 of 7 proven optimal.
-Despite the significantly harder terrain (464\,m relief, 50\% cost asymmetry, IQR scaling $c = 2.18$), the B\&C closes the optimality gap on most instances.
-The two unproven instances (Elev-biased and Mixed-density) have LP relaxation gaps of 17.0\% and 19.5\%, larger than the Torremocha gaps, reflecting the increased difficulty of the asymmetric LP relaxation on mountainous terrain.
-Notably, the SA runtime is slightly higher on La Muela (0.6--1.4\,s vs.\ 0.3--1.1\,s on Torremocha), reflecting the larger cost matrix values and more complex feasibility checks under high asymmetry.
-
-Across both terrains (14 instances total), SA finds the B\&C-verified optimum on all 10 proven instances, providing strong empirical evidence for the effectiveness of the tuned SA on real-terrain OP instances.
 
 \begin{proposition}[Optimality certificate]
 \label{prop:optimality}
