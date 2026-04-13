@@ -1,6 +1,6 @@
 # Optimal Route Planning for Orienteering on Real Terrain
 
-End-to-end framework for solving the Asymmetric Orienteering Problem with Fatigue (AOPF) on real terrain, combining GIS-based cost surface generation with exact Branch-and-Cut optimisation.
+End-to-end framework for solving the Asymmetric Orienteering Problem with Fatigue (AOPF) on real terrain, combining a terrain-aware asymmetric cost model with exact Branch-and-Cut optimisation.
 
 ## Overview
 
@@ -119,18 +119,20 @@ hillshade, directional asymmetry heatmap, and route overlay with A* traced paths
 ## Key Results
 
 ### Real terrain instances
-Across 14 instances (7 per terrain), SA matches the B&C optimum on all 10
-proven instances. LP relaxation gaps on unproven instances range from 4.2%
-to 19.5%.
+Across 14 instances (7 per terrain), the B&C incumbent matches the SA warm-start
+on all instances, with optimality proven on 10 of 14. LP relaxation gaps on
+unproven instances range from 8.6% to 19.5%.
 
 ### Heuristic comparison
-SA significantly outperforms Greedy (21% gap), GA (48% gap), and ACO (5.7% gap)
-across 21 benchmark instances (Wilcoxon signed-rank p < 0.05 for all pairs).
+Under equal 2-second time budgets, SA significantly outperforms Greedy (23% gap),
+GA (49% gap), and ACO (8.1% gap) across 21 benchmark instances
+(Wilcoxon signed-rank, all p < 0.001).
 
 ### Benchmark scaling
 The B&C proves optimality for n ≤ 30 within 15 minutes. At n ≥ 40, gaps range
-from 7–25% depending on asymmetry and fatigue rate. Higher fatigue rates
-increase the LP gap due to McCormick relaxation looseness.
+from 17–25% depending on asymmetry and fatigue rate. The McCormick envelope is
+the primary source of LP relaxation looseness: gaps increase from 6.6% (λ = 0)
+to 24.9% (λ = 0.3).
 
 ## Benchmark Suite
 
