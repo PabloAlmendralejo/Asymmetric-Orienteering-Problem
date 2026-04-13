@@ -1,5 +1,7 @@
 # Optimal Route Planning for Orienteering on Real Terrain
 
+**Author:** Pablo Borrego Ramos — pabloalmendralejo@gmail.com
+
 End-to-end framework for solving the Asymmetric Orienteering Problem with Fatigue (AOPF) on real terrain, combining a terrain-aware asymmetric cost model with exact Branch-and-Cut optimisation.
 
 ## Overview
@@ -106,7 +108,7 @@ hillshade, directional asymmetry heatmap, and route overlay with A* traced paths
 
 | | Torremocha | La Muela |
 |---|---|---|
-| Location | Extremadura, Spain | Salamanca, Spain |
+| Location | Cáceres, Spain | Salamanca, Spain |
 | CRS | EPSG:25829 | EPSG:25830 |
 | Grid | 1056 × 1463 | 1376 × 1622 |
 | Resolution | 2.0 m | 2.0 m |
@@ -175,5 +177,3 @@ Input terrain data (TIF maps, DEMs, OMAP files) are included under
 ## Citation
 
 See `paper/orienteering_paper.tex` for the full methodology and results.
-
-Repository: [github.com/PabloAlmendralejo/Orienteering-Problem](https://github.com/PabloAlmendralejo/Orienteering-Problem)
