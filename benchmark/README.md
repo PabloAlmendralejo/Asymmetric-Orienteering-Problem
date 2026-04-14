@@ -19,13 +19,12 @@ This creates 21 instances varying:
 
 ## Solvers
 
-Three solver variants are provided:
+Two solver variants are provided:
 
 | Solver | File | Formulation |
 |---|---|---|
 | Original B&C | `benchmark_solver.cpp` | MTZ time propagation + McCormick linearisation of fatigue |
 | Flow B&C | `benchmark_solver_flow.cpp` | Single-commodity flow variables, fatigue budget is linear (no McCormick) |
-| Branch-and-Price | `benchmark_solver_bp.cpp` | Column generation with ng-route pricing (experimental) |
 
 All solvers share the same SA warm-start (seed 42, deterministic) for fair comparison.
 
@@ -39,10 +38,6 @@ benchmark_solver.exe instances
 # Flow B&C
 cl.exe /O2 /std:c++20 /EHsc benchmark_solver_flow.cpp /I<highs_include> /link highs.lib /out:benchmark_solver_flow.exe
 benchmark_solver_flow.exe instances
-
-# Branch-and-Price
-cl.exe /O2 /std:c++20 /EHsc benchmark_solver_bp.cpp /I<highs_include> /link highs.lib /out:benchmark_solver_bp.exe
-benchmark_solver_bp.exe instances
 ```
 
 ## Heuristic comparison

@@ -27,3 +27,7 @@ op_output_*.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Local working copies (not part of repo)
+python_local/
+cpp_local/
