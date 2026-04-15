@@ -114,14 +114,19 @@ hillshade, directional asymmetry heatmap, and route overlay with A* traced paths
 | Relief | 55 m | 464 m |
 | Cost asymmetry | 16.1% | 50.0% |
 | HCR scaling (c) | 0.87 | 2.18 |
-| Proven optimal | 5/7 instances | 5/7 instances |
+| Proven optimal | 4/7 instances (flow) | 5/7 instances (flow) |
 
 ## Key Results
 
-### Real terrain instances
-Across 14 instances (7 per terrain), the B&C incumbent matches the SA warm-start
-on all instances, with optimality proven on 10 of 14. LP relaxation gaps on
-unproven instances range from 8.6% to 19.5%.
+### Real terrain instances (flow formulation)
+Across 14 instances (7 per terrain), the flow-based B&C proves optimality on
+9 of 14 instances. LP gaps on unproven instances range from 6.3% to 12.4%.
+
+### Formulation comparison
+Two B&C formulations are compared: MTZ with McCormick linearisation, and a
+single-commodity flow model with natively linear fatigue budget. On 21 benchmark
+instances, the flow formulation reduces the mean LP gap from 13.2% to 9.7% and
+proves 6 vs 5 instances optimal.
 
 ### Heuristic comparison
 Under equal 2-second time budgets, SA significantly outperforms Greedy (23% gap),
@@ -130,9 +135,7 @@ GA (49% gap), and ACO (8.1% gap) across 21 benchmark instances
 
 ### Benchmark scaling
 The B&C proves optimality for n ≤ 30 within 15 minutes. At n ≥ 40, gaps range
-from 17–25% depending on asymmetry and fatigue rate. The McCormick envelope is
-the primary source of LP relaxation looseness: gaps increase from 6.6% (λ = 0)
-to 24.9% (λ = 0.3).
+from 10–29% (flow) depending on asymmetry and fatigue rate.
 
 ## Benchmark Suite
 
@@ -158,14 +161,17 @@ Instances vary across:
 
 ## B&C Solver Features
 
-- MTZ time propagation with tightened big-M constants
-- McCormick linearisation of bilinear fatigue term
+Two LP formulations:
+- **MTZ formulation**: MTZ time propagation with tightened big-M constants, McCormick linearisation of bilinear fatigue term
+- **Flow formulation**: single-commodity flow variables, natively linear fatigue budget (no McCormick)
+
+Shared features:
 - Directed subtour elimination (Kosaraju SCC)
 - Depot-unreachable detection (reverse BFS)
 - Lifted cover cuts on fatigue budget knapsack
 - Fatigue-aware arc elimination
 - LP gap tracking and explored/unexplored node counts
-- Deterministic SA with 10x restarts for robust warm starts
+- Deterministic SA with multi-restart warm starts
 
 ## Data
 
