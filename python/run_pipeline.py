@@ -40,6 +40,8 @@ def load_config(area_name):
         from config import torremocha as cfg_mod
     elif area_name == 'la_muela':
         from config import la_muela as cfg_mod
+    elif area_name == 'pinofranqueado':
+        from config import pinofranqueado as cfg_mod
     else:
         raise ValueError(f"Unknown area: {area_name}")
 

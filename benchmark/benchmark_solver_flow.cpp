@@ -306,13 +306,29 @@ struct LPModel {
     }
 
     void add_time_flow_coupling(const std::vector<std::vector<double>>& cm, double bud_raw) {
-        // f[i][j] <= B * x[i][j]
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (f_col[i][j] < 0) continue;
+
+                // Upper bound: f[i][j] <= (B - C_ij - C_j0) * x[i][j]
+                // Tighter than f[i][j] <= B * x[i][j] because if arc (i,j) is
+                // used, arrival time at i can be at most B - C_ij - C_j0
+                double ub_coeff = bud_raw;
+                if (std::isfinite(cm[i][j]) && j < (int)cm.size()
+                    && std::isfinite(cm[j][0])) {
+                    ub_coeff = std::max(0.0, bud_raw - cm[i][j] - cm[j][0]);
+                }
                 add_row(-1e30, 0.0,
                         {f_col[i][j], x_col[i][j]},
-                        {1.0,         -bud_raw});
+                        {1.0,         -ub_coeff});
+
+                // Lower bound: f[i][j] >= C_0i * x[i][j]
+                // Earliest possible arrival at i is the direct cost from depot
+                if (i > 0 && std::isfinite(cm[0][i]) && cm[0][i] > 1e-9) {
+                    add_row(0.0, 1e30,
+                            {f_col[i][j], x_col[i][j]},
+                            {1.0,         -cm[0][i]});
+                }
             }
     }
 
@@ -459,6 +475,110 @@ struct LPModel {
 };
 
 
+// ── Max-flow separation (push-relabel) ─────────────────────────────────────
+// For each visited node k, compute max-flow from depot to k on the fractional
+// graph. If max-flow < y_k, the min-cut gives a violated connectivity cut.
+
+struct MaxFlow {
+    struct Edge { int to, rev; double cap; };
+    int n;
+    std::vector<std::vector<Edge>> graph;
+    std::vector<int> level, iter;
+
+    MaxFlow(int n) : n(n), graph(n), level(n), iter(n) {}
+
+    void add_edge(int from, int to, double cap) {
+        graph[from].push_back({to, (int)graph[to].size(), cap});
+        graph[to].push_back({from, (int)graph[from].size() - 1, 0.0});
+    }
+
+    bool bfs(int s, int t) {
+        std::fill(level.begin(), level.end(), -1);
+        std::queue<int> q;
+        level[s] = 0;
+        q.push(s);
+        while (!q.empty()) {
+            int v = q.front(); q.pop();
+            for (auto& e : graph[v])
+                if (e.cap > 1e-9 && level[e.to] < 0) {
+                    level[e.to] = level[v] + 1;
+                    q.push(e.to);
+                }
+        }
+        return level[t] >= 0;
+    }
+
+    double dfs(int v, int t, double f) {
+        if (v == t) return f;
+        for (int& i = iter[v]; i < (int)graph[v].size(); ++i) {
+            Edge& e = graph[v][i];
+            if (e.cap > 1e-9 && level[v] < level[e.to]) {
+                double d = dfs(e.to, t, std::min(f, e.cap));
+                if (d > 1e-9) {
+                    e.cap -= d;
+                    graph[e.to][e.rev].cap += d;
+                    return d;
+                }
+            }
+        }
+        return 0.0;
+    }
+
+    double max_flow(int s, int t) {
+        double flow = 0.0;
+        while (bfs(s, t)) {
+            std::fill(iter.begin(), iter.end(), 0);
+            double d;
+            while ((d = dfs(s, t, 1e18)) > 1e-9)
+                flow += d;
+        }
+        return flow;
+    }
+
+    // After max_flow, nodes reachable from s in residual graph form the S side of min-cut
+    std::vector<int> min_cut_S(int s) {
+        std::vector<int> S;
+        for (int i = 0; i < n; ++i)
+            if (level[i] >= 0) S.push_back(i);
+        return S;
+    }
+};
+
+std::vector<std::vector<int>> find_maxflow_cuts(const LPModel& model) {
+    const int n = model.n;
+    std::vector<std::vector<int>> cuts;
+
+    // Build fractional capacity graph
+    // For each visited node k, check if max-flow(0, k) < y_k
+    for (int k = 1; k < n; ++k) {
+        double yk = model.prim(model.y_col[k]);
+        if (yk < 0.1) continue;  // skip unvisited nodes
+
+        MaxFlow mf(n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                if (i == j || model.x_col[i][j] < 0) continue;
+                double cap = model.prim(model.x_col[i][j]);
+                if (cap > 1e-9)
+                    mf.add_edge(i, j, cap);
+            }
+
+        double flow = mf.max_flow(0, k);
+        if (flow < yk - 1e-6) {
+            // Violated: min-cut separates depot from k
+            auto S_side = mf.min_cut_S(0);
+            // The cut set is V \ S_side (nodes not reachable from depot in residual)
+            std::set<int> S_set(S_side.begin(), S_side.end());
+            std::vector<int> cut_nodes;
+            for (int i = 1; i < n; ++i)
+                if (!S_set.count(i)) cut_nodes.push_back(i);
+            if (!cut_nodes.empty())
+                cuts.push_back(std::move(cut_nodes));
+        }
+    }
+    return cuts;
+}
+
 // ── Subtour detection (Kosaraju SCC for asymmetric) ───────────────────────
 
 // Returns sets of nodes that are either:
@@ -583,6 +703,12 @@ int find_and_add_cover_cuts(LPModel& lp, const Input& inp, int max_covers = 3) {
             if (val < 1e-6) continue;
             double w = inp.cm[i][j];
             if (!std::isfinite(w) || w <= 0) continue;
+            // Fatigue-aware weight: minimum possible fatigue cost of this arc
+            // (arrival at i is at least C_0i on any feasible route)
+            if (inp.fatigue_rate > 0 && i > 0
+                && std::isfinite(inp.cm[0][i]) && inp.cm[0][i] > 0) {
+                w *= (1.0 + inp.fatigue_rate * inp.cm[0][i] / inp.bud_raw);
+            }
             arcs.push_back({lp.x_col[i][j], w, val});
         }
 
@@ -936,6 +1062,10 @@ struct Solver {
             auto unreachable = find_depot_unreachable(lp);
             subtours.insert(subtours.end(), unreachable.begin(), unreachable.end());
 
+            // Max-flow separation: find violated connectivity cuts missed by rounding
+            auto mf_cuts = find_maxflow_cuts(lp);
+            subtours.insert(subtours.end(), mf_cuts.begin(), mf_cuts.end());
+
             int cover_cuts = find_and_add_cover_cuts(lp, inp);
 
             if (subtours.empty() && cover_cuts == 0) break;
@@ -948,19 +1078,15 @@ struct Solver {
         double lp_ub = lp.obj();
         if (lp_ub <= best_pts + 1e-6) return;
 
-        // Check integrality (simple: all vars 0/1 within tol)
+        // Check integrality and select branching variable
         bool integer_sol = true;
-        int branch_col = -1;
-        double max_frac = 0.0;
-        for (int i = 1; i < root.n; ++i) {  // Branch on y[i]
+        std::vector<std::pair<int,int>> candidates;  // (node_index, col)
+        for (int i = 1; i < root.n; ++i) {
             double v = lp.prim(root.y_col[i]);
             double frac = std::min(v, 1.0 - v);
             if (frac > 1e-5) {
                 integer_sol = false;
-                if (frac > max_frac) {
-                    max_frac = frac;
-                    branch_col = root.y_col[i];
-                }
+                candidates.push_back({i, root.y_col[i]});
             }
         }
 
@@ -974,16 +1100,57 @@ struct Solver {
                 best_route = std::move(route);
                 std::cerr << "New best: " << best_pts << " pts (" << best_route.size() << " nodes)\n";
             }
-        } else if (branch_col > 0) {
-            // Branch
-            BNCNode node0 = node, node1 = node;
-            node0.fixings.emplace_back(branch_col, 0.0);
-            node0.ub = lp_ub;
-            node1.fixings.emplace_back(branch_col, 1.0);
-            node1.ub = lp_ub;
-            // Push in LIFO order (DFS)
-            node_stack.push(std::move(node0));
-            node_stack.push(std::move(node1));
+        } else if (!candidates.empty()) {
+            int branch_col = -1;
+
+            // Reliability branching: use strong branching for first few decisions,
+            // then fall back to pseudocost branching
+            if (node.fixings.size() < 8 && candidates.size() <= 20) {
+                // Strong branching: tentatively branch on each candidate, pick best
+                double best_score = -1.0;
+                for (const auto& [ni, col] : candidates) {
+                    // Try fixing to 0
+                    auto fixings0 = node.fixings;
+                    fixings0.emplace_back(col, 0.0);
+                    LPModel lp0;
+                    lp0.clone_from(root, fixings0);
+                    double ub0 = lp0.solve() ? lp0.obj() : -1e30;
+
+                    // Try fixing to 1
+                    auto fixings1 = node.fixings;
+                    fixings1.emplace_back(col, 1.0);
+                    LPModel lp1;
+                    lp1.clone_from(root, fixings1);
+                    double ub1 = lp1.solve() ? lp1.obj() : -1e30;
+
+                    // Score: product of bound improvements (standard strong branching score)
+                    double down = std::max(lp_ub - ub0, 1e-6);
+                    double up   = std::max(lp_ub - ub1, 1e-6);
+                    double score = (1e-6 + down) * (1e-6 + up);
+                    if (score > best_score) {
+                        best_score = score;
+                        branch_col = col;
+                    }
+                }
+            } else {
+                // Most-fractional fallback
+                double max_frac = 0.0;
+                for (const auto& [ni, col] : candidates) {
+                    double v = lp.prim(col);
+                    double frac = std::min(v, 1.0 - v);
+                    if (frac > max_frac) { max_frac = frac; branch_col = col; }
+                }
+            }
+
+            if (branch_col > 0) {
+                BNCNode node0 = node, node1 = node;
+                node0.fixings.emplace_back(branch_col, 0.0);
+                node0.ub = lp_ub;
+                node1.fixings.emplace_back(branch_col, 1.0);
+                node1.ub = lp_ub;
+                node_stack.push(std::move(node0));
+                node_stack.push(std::move(node1));
+            }
         }
     }
 };

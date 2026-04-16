@@ -52,7 +52,8 @@ def load_map_image(tif_path, world_A, world_B, world_C, world_D, world_E, world_
 
 
 def load_dem(mdt_path, map_crs, bounds_utm):
-    """Load DEM, crop to map extent, and resample to UTM grid."""
+    """Load DEM, crop to map extent, and resample to UTM grid.
+    Handles DEMs in either EPSG:4326 or the same CRS as the map."""
     x_min, y_min, x_max, y_max = bounds_utm
     transformer = Transformer.from_crs(map_crs, "EPSG:4326", always_xy=True)
 
@@ -67,10 +68,22 @@ def load_dem(mdt_path, map_crs, bounds_utm):
 
     print(f"Map in lat/lon: ({lon_min:.6f}, {lat_min:.6f}) → ({lon_max:.6f}, {lat_max:.6f})")
 
-    pad = 0.002
     with rasterio.open(mdt_path) as src:
-        window = from_bounds(lon_min - pad, lat_min - pad,
-                             lon_max + pad, lat_max + pad, src.transform)
+        dem_crs = src.crs
+        # If DEM is in the same CRS as the map, crop in UTM coordinates
+        if dem_crs is not None and dem_crs.to_epsg() == rasterio.crs.CRS.from_string(map_crs).to_epsg():
+            pad = 100  # metres
+            window = from_bounds(x_min - pad, y_min - pad,
+                                 x_max + pad, y_max + pad, src.transform)
+            print(f"DEM is in {map_crs} — cropping in UTM coordinates")
+            dem_is_utm = True
+        else:
+            pad = 0.002  # degrees
+            window = from_bounds(lon_min - pad, lat_min - pad,
+                                 lon_max + pad, lat_max + pad, src.transform)
+            print(f"DEM is in {dem_crs} — cropping in lat/lon coordinates")
+            dem_is_utm = False
+
         elev_crop = src.read(1, window=window).astype(float)
         crop_transform = src.window_transform(window)
         crop_bounds = rasterio.windows.bounds(window, src.transform)
@@ -82,11 +95,11 @@ def load_dem(mdt_path, map_crs, bounds_utm):
     print(f"MDT02 crop: {elev_crop.shape}")
     print(f"Elevation: {np.nanmin(elev_crop):.1f} – {np.nanmax(elev_crop):.1f} m")
 
-    return elev_crop, crop_transform, crop_bounds, transformer
+    return elev_crop, crop_transform, crop_bounds, transformer, dem_is_utm
 
 
 def build_utm_grid(bounds_utm, resolution, elev_crop, crop_transform, crop_bounds,
-                   transformer_to_ll, img_array, utm_to_pixel_func):
+                   transformer_to_ll, img_array, utm_to_pixel_func, dem_is_utm=False):
     """Build UTM grid, resample DEM and image onto it."""
     x_min, y_min, x_max, y_max = bounds_utm
 
@@ -97,12 +110,20 @@ def build_utm_grid(bounds_utm, resolution, elev_crop, crop_transform, crop_bound
     print(f"\nUTM grid: {nx} x {ny}")
 
     # Resample DEM
-    grid_lon, grid_lat = transformer_to_ll.transform(gx, gy)
     crop_left, crop_bottom, crop_right, crop_top = crop_bounds
-    pixel_size_lon = crop_transform[0]
-    pixel_size_lat = abs(crop_transform[4])
-    pixel_cols_f = (grid_lon - crop_left) / pixel_size_lon
-    pixel_rows_f = (crop_top - grid_lat) / pixel_size_lat
+    if dem_is_utm:
+        # DEM is already in UTM — map UTM coordinates directly to pixel indices
+        pixel_size_x = crop_transform[0]
+        pixel_size_y = abs(crop_transform[4])
+        pixel_cols_f = (gx - crop_left) / pixel_size_x
+        pixel_rows_f = (crop_top - gy) / pixel_size_y
+    else:
+        # DEM is in lat/lon — convert UTM grid to lat/lon first
+        grid_lon, grid_lat = transformer_to_ll.transform(gx, gy)
+        pixel_size_lon = crop_transform[0]
+        pixel_size_lat = abs(crop_transform[4])
+        pixel_cols_f = (grid_lon - crop_left) / pixel_size_lon
+        pixel_rows_f = (crop_top - grid_lat) / pixel_size_lat
 
     elev_utm = map_coordinates(elev_crop, [pixel_rows_f, pixel_cols_f],
                                 order=3, mode='nearest', cval=np.nan)
@@ -296,18 +317,24 @@ def rasterize_omap(omap_data, bounds_utm, resolution, nx, ny):
                 for ux, uy in utm_coords]
 
     # Initialize grids
-    cost_omap = np.full((ny, nx), -1.0, dtype=np.float32)
+    cost_omap = np.full((ny, nx), -1.0, dtype=np.float64)
     path_grid = np.zeros((ny, nx), dtype=np.uint8)
-    water_grid = np.zeros((ny, nx), dtype=bool)
+    water_grid = np.zeros((ny, nx), dtype=np.uint8)
     wall_grid = np.zeros((ny, nx), dtype=np.uint8)
 
     print("  Rasterizing...")
 
     # Process objects
     n_paths = n_areas = n_points = n_oob = 0
+    n_total_obj = 0
     unknown_codes = Counter()
 
-    for obj in root.iter(f'{NSP}object'):
+    all_objects = list(root.iter(f'{NSP}object'))
+    print(f"  Total objects: {len(all_objects)}")
+
+    for obj_idx, obj in enumerate(all_objects):
+        if obj_idx % 500 == 0 and obj_idx > 0:
+            print(f"  ... processed {obj_idx}/{len(all_objects)} objects")
         sym_id = obj.get('symbol', '')
         obj_type = int(obj.get('type', -1))
         sym_info = omap_symbols.get(sym_id, {})
@@ -343,7 +370,7 @@ def rasterize_omap(omap_data, bounds_utm, resolution, nx, ny):
                 if cat == 'wall':
                     rast_line_omap(wall_grid, grid_coords, 1, buf)
                 elif cat in ('lake', 'water', 'river'):
-                    rast_line_omap(water_grid, grid_coords, True, buf)
+                    rast_line_omap(water_grid, grid_coords, 1, buf)
             else:
                 rast_line_cost_omap(cost_omap, grid_coords, cost_val, buf)
             if is_path:
@@ -416,13 +443,13 @@ def run_preprocessing(cfg):
         cfg['world_D'], cfg['world_E'], cfg['world_F'])
 
     # Load DEM
-    elev_crop, crop_tf, crop_bounds, tf_to_ll = load_dem(
+    elev_crop, crop_tf, crop_bounds, tf_to_ll, dem_is_utm = load_dem(
         cfg['mdt_path'], cfg['map_crs'], bounds)
 
     # Build UTM grid
     grid_x, grid_y, nx, ny, elev_utm, img_utm, gx, gy = build_utm_grid(
         bounds, cfg['resolution'], elev_crop, crop_tf, crop_bounds,
-        tf_to_ll, img_array, utm_to_pixel)
+        tf_to_ll, img_array, utm_to_pixel, dem_is_utm=dem_is_utm)
 
     # Parse and rasterize OMAP
     print(f"\n[3b] OMAP rasterization to UTM grid")
