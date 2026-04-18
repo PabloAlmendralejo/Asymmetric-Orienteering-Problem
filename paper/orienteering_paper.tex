@@ -37,16 +37,16 @@ An Integrated Cost Surface and Branch-and-Cut Approach}
 \maketitle
 
 \begin{abstract}
-We present an end-to-end computational framework for solving the Orienteering Problem (OP) on real terrain, combining a terrain-aware asymmetric cost model with exact combinatorial optimisation via Branch-and-Cut.
-The cost surface combines three layers: (i)~an Areal Cost Raster (ACR) derived from IOF orienteering map symbols, (ii)~a Hypsometry Cost Raster (HCR) capturing terrain morphometry via the Terrain Ruggedness Index, plan curvature, and slope magnitude, and (iii)~a directional metabolic cost model based on the Minetti polynomial.
-A cumulative fatigue model modulates travel cost as a function of elapsed effort.
-The resulting asymmetric cost matrix feeds a Branch-and-Cut (B\&C) solver that provides provably optimal solutions, warm-started by a Simulated Annealing (SA) metaheuristic.
-We compare two LP formulations: an MTZ-based model with McCormick linearisation of the bilinear fatigue term, and a flow-based model where the fatigue budget is natively linear.
-We validate the framework on two Spanish terrains---Torremocha and La Muela---across seven control-point distributions each.
-The flow-based B\&C certifies global optimality on 9 of 14 real-terrain instances within a 15-minute time limit, with tighter LP gaps than the MTZ formulation on benchmark instances (mean gap 9.7\% vs.\ 13.2\%).
+We present an end-to-end computational framework for provably optimal route planning in orienteering races on real terrain.
+A GIS pipeline combines IOF map symbols, DEM-derived morphometry, and the Minetti metabolic model into a fully asymmetric cost matrix, where directional slope costs and cumulative fatigue make travel cost depend on both direction and elapsed effort.
+The terrain realities captured by this pipeline---asymmetry, fatigue, and heterogeneous surface costs---lead naturally to a new problem variant, the Asymmetric Orienteering Problem with Fatigue (AOPF), for which we develop tailored exact solution methods.
+We propose two LP formulations: an MTZ-based model with McCormick linearisation and a single-commodity flow formulation where the fatigue budget is natively linear.
+We strengthen the Branch-and-Cut solver with routing infeasibility cuts, a novel family of pure node-variable inequalities based on the assignment relaxation, alongside tightened flow-arc coupling bounds, fatigue-aware lifted covers, and directed adaptations of cycle cover and path inequalities.
+We validate the framework on two Spanish terrains across seven control-point distributions each, and release a parameterised benchmark suite of 21 instances for the asymmetric OP with fatigue.
+The flow-based B\&C certifies global optimality on 9 of 14 real-terrain instances within a 15-minute time limit, with tighter LP gaps than the MTZ formulation (mean gap 9.7\% vs.\ 13.2\% on benchmark instances).
 \end{abstract}
 
-\noindent\textbf{Keywords:} orienteering problem, least-cost path, branch-and-cut, terrain cost surface, Minetti metabolic model, simulated annealing
+\noindent\textbf{Keywords:} orienteering problem, asymmetric routing, cumulative fatigue, branch-and-cut, valid inequalities, flow formulation, terrain cost surface, Minetti metabolic model
 
 % ════════════════════════════════════════════════════════════════
 \section{Introduction}
@@ -61,12 +61,19 @@ In competitive orienteering and rogaine events, route choice is the decisive ski
 Course setters estimate ideal times using subjective experience, but the underlying cost function is a nonlinear function of terrain type, slope, and accumulated fatigue.
 
 This paper bridges two research streams: (i)~GIS-based cost surface modelling for orienteering maps, following \citet{ica2021lcp}, and (ii)~exact optimisation of the OP via integer programming.
+The terrain realities captured by the cost pipeline---directional slope costs, surface heterogeneity, and cumulative fatigue---produce a problem structure not addressed by existing OP formulations, motivating both a new problem variant and tailored solution methods.
 Our contributions are:
 \begin{enumerate}[nosep]
   \item A terrain cost model combining IOF map symbols (ACR), DEM-derived morphometry (HCR), directional metabolic cost (Minetti), and cumulative fatigue into a single asymmetric cost matrix.
   \item An IQR-based scaling method for merging ACR and HCR that adapts to terrain characteristics without manual calibration.
-  \item A Branch-and-Cut formulation for the asymmetric OP with fatigue, comparing two LP models: (a)~MTZ time propagation with McCormick linearisation of the bilinear fatigue term, and (b)~a single-commodity flow formulation where the fatigue budget is natively linear, eliminating the McCormick relaxation gap.
-  \item Computational experiments on two real terrains with seven control distributions, demonstrating provable optimality on multiple instances.
+  \item The Asymmetric Orienteering Problem with Fatigue (AOPF), a problem variant arising naturally from the terrain pipeline, formalising the OP with directed travel costs and a cumulative fatigue multiplier.
+  To the best of our knowledge, this is the first exact formulation for the OP with position-dependent fatigue costs.
+  \item Two LP formulations for the AOPF: (a)~an MTZ-based model with McCormick linearisation of the bilinear fatigue term, and (b)~a single-commodity flow formulation where the fatigue budget is natively linear, eliminating the McCormick relaxation gap entirely.
+  The MTZ formulation serves as a natural baseline with fewer variables ($O(n)$ time variables vs $O(n^2)$ flow variables); comparing the two isolates the McCormick envelope as the primary source of LP relaxation looseness.
+  \item Valid inequalities tailored to the AOPF: (a)~tightened flow-arc coupling bounds exploiting minimum arrival times, (b)~fatigue-aware lifted cover inequalities with position-dependent cost inflation, and (c)~routing infeasibility cuts---a novel family of pure node-variable inequalities that use the assignment relaxation to identify subsets of nodes that cannot all be visited within the fatigue-adjusted budget.
+  We also adapt the cycle cover and path inequalities of \citet{fischetti1998solving} to the directed asymmetric setting with fatigue.
+  \item A parameterised benchmark suite of 21 synthetic instances for the asymmetric OP with fatigue, varying node count, asymmetry, fatigue rate, and budget tightness---the first benchmark for this problem variant.
+  \item Computational experiments on two real terrains comparing the MTZ and flow formulations, and an ablation study on the benchmark suite quantifying the marginal contribution of each cut family.
 \end{enumerate}
 
 The remainder of this paper is organised as follows.
@@ -293,7 +300,7 @@ We model fatigue as a linear multiplier on travel cost:
   f(t) = 1 + \lambda \cdot \frac{t}{B}
   \label{eq:fatigue}
 \end{equation}
-where $t$ is the elapsed base travel time, $B$ is the raw time budget, and $\lambda$ is the fatigue rate (calibrated in \cref{sec:experiments).}
+where $t$ is the elapsed base travel time, $B$ is the raw time budget, and $\lambda$ is the fatigue rate (calibrated in \cref{sec:experiments}).
 
 The effective (fatigue-adjusted) cost of traversing arc $(i,j)$ after elapsed time $t_i$ is:
 \begin{equation}
@@ -322,8 +329,8 @@ Both share the same objective, arc/node variables, and subtour elimination cuts;
 \subsection{Sets and Parameters}
 
 Let $V = \{0, 1, \ldots, n\}$ be the set of nodes, where node~0 is the depot.
-The parameters $C_{ij$, $B$, and $\lambda$ are as defined in \cref{sec:cost}.
-Each node $i$ has a score $p_i \geq 0$ (with $p_0 = 0$).}
+The parameters $C_{ij}$, $B$, and $\lambda$ are as defined in \cref{sec:cost}.
+Each node $i$ has a score $p_i \geq 0$ (with $p_0 = 0$).
 
 \subsection{Decision Variables}
 
@@ -357,7 +364,7 @@ An arc $(i,j)$ is eliminated if the base cost alone exceeds the budget:
   x_{ij} = 0 \quad \text{if } C_{ij} + C_{j0} > B \;\text{ or }\; C_{0i} + C_{ij} + C_{j0} > B
   \label{eq:arcelim}
 \end{equation}
-The base-cost test~\eqref{eq:arcelim is applied first as a computationally inexpensive pre-filter (no multiplications); arcs that survive are then tested with the fatigue-aware criterion.}
+The base-cost test~\eqref{eq:arcelim} is applied first as a computationally inexpensive pre-filter (no multiplications); arcs that survive are then tested with the fatigue-aware criterion.
 Even on the shortest possible path using arc $(i,j)$---the direct route $0 \to i \to j \to 0$---the fatigue-adjusted cost must not exceed the budget:
 \begin{equation}
   x_{ij} = 0 \quad \text{if } C_{0i} + C_{ij}\!\left(1 + \frac{\lambda\, C_{0i}}{B}\right) + C_{j0}\!\left(1 + \frac{\lambda\,(C_{0i} + C_{ij})}{B}\right) > B
@@ -404,9 +411,9 @@ The McCormick envelope is an outer approximation of the true bilinear set, intro
 \subsection{Formulation B: Single-Commodity Flow}
 \label{sec:formulation_flow}
 
-This formulation replaces the MTZ time variables and McCormick auxiliary variables with flow variables $f_{ij \geq 0$.
+This formulation replaces the MTZ time variables and McCormick auxiliary variables with flow variables $f_{ij} \geq 0$.
 We define $f_{ij}$ so that, by construction of the constraints below, $f_{ij} = t_i \cdot x_{ij}$ exactly---not an approximation.
-This eliminates the McCormick relaxation looseness introduced by Formulation~A, making the fatigue budget a natively linear constraint.}
+This eliminates the McCormick relaxation looseness introduced by Formulation~A, making the fatigue budget a natively linear constraint.
 
 \paragraph{Flow-arc coupling.}
 Flow is only permitted on active arcs:
@@ -422,11 +429,11 @@ At each non-depot node $j$, the incoming time (flow plus arc traversal cost) equ
   \label{eq:flow_conservation}
 \end{equation}
 Depot outgoing flow is fixed to zero: $f_{0j} = 0$ for all $j$.
-Together with the coupling constraint~\eqref{eq:flow_coupling, this ensures that $f_{ij}$ carries the cumulative elapsed time at node $i$ whenever arc $(i,j)$ is active, and is zero otherwise---exactly $f_{ij} = t_i \cdot x_{ij}$.
-The flow structure eliminates subtours for integer solutions; the explicit SECs and connectivity cuts (\cref{eq:sec,eq:outcut,eq:incut}) remain necessary to cut off fractional subtours in the LP relaxation.}
+Together with the coupling constraint~\eqref{eq:flow_coupling}, this ensures that $f_{ij}$ carries the cumulative elapsed time at node $i$ whenever arc $(i,j)$ is active, and is zero otherwise---exactly $f_{ij} = t_i \cdot x_{ij}$.
+The flow structure eliminates subtours for integer solutions; the explicit SECs and connectivity cuts (\cref{eq:sec,eq:outcut,eq:incut}) remain necessary to cut off fractional subtours in the LP relaxation.
 
 \paragraph{Fatigue budget (flow).}
-Because $f_{ij = t_i \cdot x_{ij}$ by construction, the fatigue budget is natively linear:}
+Because $f_{ij} = t_i \cdot x_{ij}$ by construction, the fatigue budget is natively linear:
 \begin{equation}
   \sum_{(i,j) \in A} C_{ij} \, x_{ij} + \frac{\lambda}{B} \sum_{(i,j) \in A} C_{ij} \, f_{ij} \leq B
   \label{eq:fatigue_budget_flow}
@@ -436,10 +443,11 @@ The flow formulation has $O(n^2)$ additional continuous variables (one $f_{ij}$ 
 \subsection{Subtour Elimination and Connectivity Cuts}
 
 Both formulations use the same family of cutting planes, added dynamically during the B\&C search.
-Because the cost matrix is asymmetric ($C_{ij \neq C_{ji}$), all cuts are formulated on the directed arc variables $x_{ij}$.}
+Because the cost matrix is asymmetric ($C_{ij} \neq C_{ji}$), all cuts are formulated on the directed arc variables $x_{ij}$.
+An inequality is \emph{valid} for the AOPF if it is satisfied by every integer-feasible solution; adding valid inequalities to the LP relaxation tightens the upper bound without excluding any feasible solution.
 
 \paragraph{Subtour elimination constraints (SECs).}
-For a subset $S \subseteq V \setminus \{0\}$, the directed SEC prevents cycles disconnected from the depot:
+For a subset $S \subseteq V \setminus \{0\}$ (identified by the separation routines in \cref{sec:separation}), the directed SEC prevents cycles disconnected from the depot:
 \begin{equation}
   \sum_{i \in S} \sum_{j \in S} x_{ij} \leq |S| - 1
   \label{eq:sec}
@@ -457,22 +465,139 @@ A combined two-way cut further tightens the relaxation:
   \label{eq:twocut}
 \end{equation}
 
-\paragraph{Separation routines.}
-Two procedures identify violated subsets $S$ in the fractional LP solution.
-\emph{Subtour detection (Kosaraju SCC):} a directed support graph is constructed from arcs with $x_{ij} > 0.5$; Kosaraju's algorithm identifies all strongly connected components in $O(|V| + |A|)$ time.
-Any SCC not containing the depot yields a violated subset, and all four cut types (\cref{eq:sec,eq:outcut,eq:incut,eq:twocut}) are added.
-\emph{Depot-unreachable detection (reverse BFS):} a reverse BFS from the depot identifies nodes that \emph{can} reach the depot; any visited node ($y_i > 0.5$) not in this set requires an outgoing connectivity cut.
-This two-phase separation is essential for the asymmetric OP: Kosaraju detects closed subtours, while the reverse BFS catches ``dangling'' paths that leave the depot but cannot return.
+\subsection{Budget-Based Cutting Planes}
 
-\paragraph{Lifted cover cuts.}
-The fatigue budget constraint has the structure of a knapsack inequality.
-We add lifted cover inequalities: a cover $\mathcal{C}$ is a subset of arc variables whose base costs sum to more than $B$, yielding:
+The cuts in this subsection exploit the budget constraint to eliminate LP solutions that are structurally infeasible due to excessive routing cost.
+They complement the subtour and connectivity cuts above, which enforce tour structure but do not account for cost.
+We present four families of budget-based cuts, numbered (B1)--(B4).
+The separation routines used to identify violated instances of each cut are described in \cref{sec:separation}.
+
+\paragraph{(B1) Lifted cover cuts.}
+The fatigue budget constraint $\sum_{(i,j) \in A} C_{ij}\, x_{ij} + \tfrac{\lambda}{B} \sum_{(i,j) \in A} C_{ij}\, f_{ij} \leq B$ limits the total cost of arcs used in the solution.
+Consider a subset of arcs $\mathcal{C} \subseteq A$ whose combined base costs exceed the budget: $\sum_{(i,j) \in \mathcal{C}} C_{ij} > B$.
+A feasible solution may use some arcs from $\mathcal{C}$, but it cannot use all of them simultaneously---doing so would exceed the budget even before accounting for fatigue.
+Such a set $\mathcal{C}$ is called a \emph{cover}, and the corresponding \emph{cover inequality} states:
 \begin{equation}
-  \sum_{k \in \mathcal{C}} x_k \leq |\mathcal{C}| - 1
+  \sum_{(i,j) \in \mathcal{C}} x_{ij} \leq |\mathcal{C}| - 1
   \label{eq:cover}
 \end{equation}
-Covers are found greedily and optionally strengthened via sequential lifting.
-Up to 3 cover cuts are added per cut-loop iteration alongside the SECs.
+That is, at least one arc in the cover must be excluded from any feasible solution.
+Each cover can be \emph{lifted}: for arcs $e \notin \mathcal{C}$, a coefficient $\alpha_e \geq 0$ is computed such that adding $\alpha_e\, x_e$ to the left-hand side preserves validity, strengthening the inequality.
+
+\paragraph{(B2) Routing infeasibility cuts.}
+The cover cuts (B1) operate on arc variables $x_{ij}$, which the LP can soften through fractional values.
+We introduce a complementary family of inequalities defined purely on the node-visit variables $y_i$, exploiting the fact that certain subsets of nodes cannot all be visited within the budget regardless of the route chosen.
+
+For a subset $Q \subseteq V \setminus \{0\}$, let $\text{MRC}(Q)$ denote a lower bound on the fatigue-adjusted cost of any cycle visiting all nodes in $Q \cup \{0\}$.
+We compute $\text{MRC}(Q)$ via the assignment relaxation: the minimum-cost set of arcs in the subgraph induced by $Q \cup \{0\}$ such that each node has exactly one incoming and one outgoing arc, solvable in $O(|Q|^3)$ by the Hungarian algorithm.
+The assignment cost is then inflated by a conservative fatigue factor $(1 + \lambda/2)$, reflecting the average fatigue multiplier across the route.
+
+\begin{proposition}[Routing infeasibility]
+\label{prop:routing}
+For any $Q \subseteq V \setminus \{0\}$ with $\text{MRC}(Q) > B$, the inequality
+\begin{equation}
+  \sum_{i \in Q} y_i \leq |Q| - 1
+  \label{eq:routing_infeasibility}
+\end{equation}
+is satisfied by every integer-feasible solution of the AOPF\@.
+\end{proposition}
+
+\begin{proof}
+Suppose an integer-feasible solution has $y_i = 1$ for all $i \in Q$.
+The solution defines a cycle $\sigma$ through the depot visiting a set $W$ with $Q \subseteq W$.
+By definition, $D^f(\sigma) \geq \text{MRC}(Q)$ since $\sigma$ visits all nodes in $Q \cup \{0\}$ and $\text{MRC}(Q)$ is the minimum cost over all such cycles.
+But $D^f(\sigma) \leq B$ (budget feasibility), contradicting $\text{MRC}(Q) > B$.
+\end{proof}
+
+Unlike cover cuts (B1), which the LP can satisfy by reducing fractional arc values, routing infeasibility cuts constrain the $y_i$ variables directly.
+The LP cannot circumvent them by redistributing arc flow, since the inequality involves no arc variables.
+
+\paragraph{(B3) Directed cycle cover cuts.}
+We adapt the cycle cover inequalities of \citet{fischetti1998solving} from the undirected OP to our directed formulation.
+Let $F \subset A$ be a set of directed arcs forming a directed cycle through nodes $V(F)$, and let $\text{MRC}(F)$ denote a lower bound on the fatigue-adjusted cost of traversing $F$.
+
+\begin{proposition}[Directed cycle cover]
+\label{prop:cyclecover}
+For any directed cycle $F \subset A$ with $\text{MRC}(F) > B$, the inequality
+\begin{equation}
+  \sum_{(i,j) \in F} x_{ij} \leq \sum_{v \in V(F)} y_v - 1
+  \label{eq:cycle_cover}
+\end{equation}
+is satisfied by every integer-feasible solution of the AOPF\@.
+\end{proposition}
+
+\begin{proof}
+Suppose for contradiction that an integer-feasible solution has $\sum_{(i,j) \in F} x_{ij} = \sum_{v \in V(F)} y_v$, i.e., every arc in $F$ is used and every node in $V(F)$ is visited.
+Then the route contains all arcs of $F$, whose fatigue-adjusted cost is at least $\text{MRC}(F) > B$.
+Since arc costs are non-negative, the total route cost is at least the cost of the arcs in $F$ alone, so $D^f(\sigma) \geq \text{MRC}(F) > B$, contradicting budget feasibility.
+Therefore $\sum_{(i,j) \in F} x_{ij} \leq \sum_{v \in V(F)} y_v - 1$ in every integer-feasible solution.
+\end{proof}
+
+Inequality~\eqref{eq:cycle_cover} is strictly stronger than the cover (B1) because the right-hand side involves the $y_v$ variables: when the LP sets $y_v < 1$ for some $v \in V(F)$, the right-hand side decreases, forcing even fewer arcs to be used.
+Cover cuts (B1) remain useful because their separation is computationally cheaper.
+
+\paragraph{(B4) Directed path inequality cuts.}
+We adapt the path inequalities of \citet{fischetti1998solving} to the directed asymmetric OP with fatigue.
+Let $P = (v_1 \to v_2 \to \cdots \to v_k)$ be a directed path through $k$ non-depot nodes, where each $v_\ell \in V \setminus \{0\}$ is a node and the arcs $(v_\ell, v_{\ell+1})$ for $\ell = 1, \ldots, k-1$ are traversed in sequence.
+Let $V(P) = \{v_1, \ldots, v_k\}$ denote the node set of $P$.
+Define the \emph{feasible closing set}:
+\begin{equation}
+  W(P) = \left\{ v \in V \setminus V(P) : C_{0,v_1}^f + \sum_{\ell=1}^{k-1} C_{v_\ell, v_{\ell+1}}^f + C_{v_k, v}^f + C_{v, 0}^f \leq B \right\}
+  \label{eq:wp}
+\end{equation}
+where $C_{i,j}^f(t) = C_{ij} \cdot (1 + \lambda\, t / B)$ is the fatigue-adjusted cost of arc $(i,j)$ at elapsed time $t$, as defined in~\eqref{eq:fatigue_cost}, evaluated at the cumulative elapsed time along the path.
+The set $W(P)$ contains exactly those nodes through which the path can be completed into a budget-feasible cycle.
+The path inequality states:
+\begin{equation}
+  \sum_{\ell=1}^{k-1} x_{v_\ell, v_{\ell+1}} - \sum_{v \in V(P)} y_v + y_{v_1} + y_{v_k} - \sum_{v \in W(P)} x_{v_k, v} \leq 0
+  \label{eq:path_ineq}
+\end{equation}
+Intuitively, if all path arcs are used (first sum is large), then either some interior path nodes are unvisited (second and third terms compensate), or the endpoint $v_k$ connects to a node in $W(P)$ (last sum compensates).
+If neither holds, the path cannot be completed within budget.
+The fatigue model makes $W(P)$ smaller than in the symmetric case---the fatigue-inflated return cost from $v_k$ restricts the set of feasible closing nodes---producing tighter cuts on high-fatigue instances.
+
+\subsection{Separation Routines}
+\label{sec:separation}
+
+The valid inequalities defined in the preceding subsections are added dynamically during the B\&C search.
+At each node of the search tree, the solver iterates through a cut loop that attempts to find violated inequalities in the current LP solution $(y^*, x^*, f^*)$.
+The loop terminates when no violated cuts are found or a maximum number of iterations is reached.
+Below we describe how violated instances of each cut family are identified.
+
+\paragraph{Subtour and connectivity cuts.}
+A directed support graph $G^* = (V^*, A^*)$ is constructed from arcs with $x_{ij}^* > 0.5$.
+Two complementary procedures are applied:
+\begin{enumerate}[nosep]
+  \item \emph{Kosaraju SCC detection.}
+        Kosaraju's algorithm identifies all strongly connected components of $G^*$ in $O(|V^*| + |A^*|)$ time.
+        Any SCC not containing the depot yields a violated subset $S$, and all four cut types~(\cref{eq:sec,eq:outcut,eq:incut,eq:twocut}) are added for $S$.
+  \item \emph{Reverse BFS.}
+        A reverse BFS from the depot identifies nodes that can reach the depot in $G^*$.
+        Any visited node ($y_i^* > 0.5$) not in this reachable set requires an outgoing connectivity cut.
+\end{enumerate}
+This two-phase separation is essential for the asymmetric OP\@: Kosaraju detects closed subtours, while the reverse BFS catches paths that leave the depot but cannot return.
+
+\paragraph{(B1) Cover cuts.}
+Arcs with $x_{ij}^* > 0$ are sorted by decreasing $x_{ij}^*$ and accumulated greedily until their total base cost exceeds $B$.
+The resulting set $\mathcal{C}$ defines a violated cover if $\sum_{(i,j) \in \mathcal{C}} x_{ij}^* > |\mathcal{C}| - 1$, i.e., the LP uses more of these arcs than any feasible solution allows.
+Each violated cover is optionally strengthened via sequential lifting.
+Up to 3 cover cuts are added per cut-loop iteration; adding more would slow the LP solve without proportional improvement in the bound.
+
+\paragraph{(B2) Routing infeasibility cuts.}
+Nodes with $y_i^* > 0.5$ are sorted by decreasing $y_i^*$ and added one by one to a candidate set $Q$.
+After each addition, the fatigue-adjusted assignment bound $\text{MRC}(Q)$ is computed via the Hungarian algorithm ($O(|Q|^3)$).
+When $\text{MRC}(Q) > B$ and $\sum_{i \in Q} y_i^* > |Q| - 1$, a violated routing infeasibility cut has been found.
+The set $Q$ is then minimised: nodes are removed in order of increasing $y_i^*$ while $\text{MRC}(Q)$ remains above $B$, yielding a minimal infeasible set and hence the tightest cut.
+
+\paragraph{(B3) Cycle cover cuts.}
+Short directed cycles (length 3--4) are enumerated in the support graph $G^*$.
+For each cycle $F$, the fatigue-adjusted cost $\text{MRC}(F)$ is computed.
+If $\text{MRC}(F) > B$ and the inequality~\eqref{eq:cycle_cover} is violated by $(x^*, y^*)$, the cut is added.
+
+\paragraph{(B4) Path inequality cuts.}
+Directed paths of length 2--3 are enumerated in $G^*$.
+For each path $P$, the feasible closing set $W(P)$ is computed using the fatigue-adjusted arc costs at the cumulative elapsed time along $P$.
+If $W(P)$ is non-empty (otherwise the path is infeasible and handled by other cuts) and the inequality~\eqref{eq:path_ineq} is violated, the cut is added.
 
 % ════════════════════════════════════════════════════════════════
 \section{Solution Methods}
@@ -635,9 +760,9 @@ The algorithm proceeds as follows:
 
 Key implementation details:
 \begin{itemize}[nosep]
-  \item Branching is performed on the node-visit variables $y_i$ rather than arc variables $x_{ij$.
+  \item Branching is performed on the node-visit variables $y_i$ rather than arc variables $x_{ij}$.
         Setting $y_i = 0$ removes node $i$ from all future solutions in the subtree, eliminating $O(n)$ arc variables at once; setting $y_i = 1$ forces the node to be visited.
-        By contrast, fixing a single $x_{ij}$ only excludes one arc, requiring up to $O(n^2)$ branching decisions to resolve all fractional arcs.}
+        By contrast, fixing a single $x_{ij}$ only excludes one arc, requiring up to $O(n^2)$ branching decisions to resolve all fractional arcs.
   \item LP models are deep-copied via \texttt{Highs\_passLp} for thread safety.
   \item Duplicate SECs are tracked via a hash set to avoid redundant cuts.
   \item Maximum branching depth is capped at $D_{\max} = 15$.
@@ -952,7 +1077,13 @@ The Dijkstra downsampling ($s = 8$) introduces path approximation error that has
 % ════════════════════════════════════════════════════════════════
  
 We presented an integrated framework for optimal route planning in orienteering, combining GIS-based cost surface generation with exact combinatorial optimisation.
-The key methodological contributions are: (i)~the combination of ACR, HCR, and Minetti metabolic cost into a single asymmetric cost model; (ii)~IQR-based raster fusion that adapts to terrain characteristics; (iii)~two Branch-and-Cut formulations for the asymmetric OP with fatigue---an MTZ-based model with McCormick linearisation and a flow-based model with a natively linear fatigue budget---with empirical evidence that the flow formulation produces tighter LP bounds; and (iv)~computational evidence that Simulated Annealing finds optimal solutions on real-terrain instances.
+The key methodological contributions are:
+(i)~a GIS pipeline that transforms orienteering map data and terrain models into a fully asymmetric, fatigue-aware cost matrix, naturally giving rise to the Asymmetric Orienteering Problem with Fatigue (AOPF);
+(ii)~IQR-based raster fusion adapting to terrain characteristics;
+(iii)~two Branch-and-Cut formulations for the AOPF---an MTZ-based model with McCormick linearisation and a flow-based model with a natively linear fatigue budget;
+(iv)~valid inequalities tailored to the AOPF: tightened flow-arc coupling, fatigue-aware lifted covers, and routing infeasibility cuts (a novel class based on the assignment relaxation), complemented by directed adaptations of cycle cover and path inequalities;
+(v)~a parameterised benchmark suite for the asymmetric OP with fatigue; and
+(vi)~computational evidence that Simulated Annealing finds optimal solutions on real-terrain instances, with an ablation study quantifying the contribution of each cut family.
 
 Future work includes validation against real GPS data, extension to multi-day events, and integration of weather and time-of-day effects on terrain traversability.
 

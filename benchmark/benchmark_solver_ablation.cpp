@@ -22,6 +22,10 @@
 #include "lp_data/HConst.h"
 //  #include "glpk.h"
 
+// ── Global ablation flags ──────────────────────────────────────────────────
+static bool g_use_tightened_coupling = true;
+static bool g_use_fatigue_covers = true;
+
 // ── JSON parser (improved from original) ───────────────────────────────────
 
 static std::string read_file(const std::string& path) {
@@ -310,24 +314,26 @@ struct LPModel {
             for (int j = 0; j < n; ++j) {
                 if (f_col[i][j] < 0) continue;
 
-                // Upper bound: f[i][j] <= (B - C_ij - C_j0) * x[i][j]
-                // Tighter than f[i][j] <= B * x[i][j] because if arc (i,j) is
-                // used, arrival time at i can be at most B - C_ij - C_j0
                 double ub_coeff = bud_raw;
-                if (std::isfinite(cm[i][j]) && j < (int)cm.size()
-                    && std::isfinite(cm[j][0])) {
-                    ub_coeff = std::max(0.0, bud_raw - cm[i][j] - cm[j][0]);
+                if (g_use_tightened_coupling) {
+                    // Tightened: f[i][j] <= (B - C_ij - C_j0) * x[i][j]
+                    if (std::isfinite(cm[i][j]) && j < (int)cm.size()
+                        && std::isfinite(cm[j][0])) {
+                        ub_coeff = std::max(0.0, bud_raw - cm[i][j] - cm[j][0]);
+                    }
                 }
+                // else: original loose coupling f[i][j] <= B * x[i][j]
                 add_row(-1e30, 0.0,
                         {f_col[i][j], x_col[i][j]},
                         {1.0,         -ub_coeff});
 
-                // Lower bound: f[i][j] >= C_0i * x[i][j]
-                // Earliest possible arrival at i is the direct cost from depot
-                if (i > 0 && std::isfinite(cm[0][i]) && cm[0][i] > 1e-9) {
-                    add_row(0.0, 1e30,
-                            {f_col[i][j], x_col[i][j]},
-                            {1.0,         -cm[0][i]});
+                if (g_use_tightened_coupling) {
+                    // Lower bound: f[i][j] >= C_0i * x[i][j]
+                    if (i > 0 && std::isfinite(cm[0][i]) && cm[0][i] > 1e-9) {
+                        add_row(0.0, 1e30,
+                                {f_col[i][j], x_col[i][j]},
+                                {1.0,         -cm[0][i]});
+                    }
                 }
             }
     }
@@ -705,7 +711,7 @@ int find_and_add_cover_cuts(LPModel& lp, const Input& inp, int max_covers = 3) {
             if (!std::isfinite(w) || w <= 0) continue;
             // Fatigue-aware weight: minimum possible fatigue cost of this arc
             // (arrival at i is at least C_0i on any feasible route)
-            if (inp.fatigue_rate > 0 && i > 0
+            if (g_use_fatigue_covers && inp.fatigue_rate > 0 && i > 0
                 && std::isfinite(inp.cm[0][i]) && inp.cm[0][i] > 0) {
                 w *= (1.0 + inp.fatigue_rate * inp.cm[0][i] / inp.bud_raw);
             }
@@ -924,6 +930,252 @@ int find_and_add_routing_cuts(LPModel& lp, const Input& inp, int max_cuts = 3) {
 
     if (cuts_added > 0)
         std::cerr << "  Added " << cuts_added << " routing infeasibility cuts\n";
+    return cuts_added;
+}
+
+// ── Cycle Cover Cuts (directed adaptation of Fischetti 1998) ───────────────
+// If a set of directed arcs F forms a cycle with total cost > B, then:
+//   sum_{(i,j) in F} x_ij <= sum_{v in V(F)} y_v - 1
+
+int find_and_add_cycle_cover_cuts(LPModel& lp, const Input& inp, int max_cuts = 3) {
+    const int n = lp.n;
+    double B = inp.bud_raw;
+    int cuts_added = 0;
+
+    // Enumerate short directed cycles (length 3-5) in the support graph
+    // For each cycle, check if cost > B and inequality is violated
+
+    // Build adjacency from fractional solution
+    std::vector<std::vector<int>> adj(n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (i != j && lp.x_col[i][j] >= 0 && lp.prim(lp.x_col[i][j]) > 0.1)
+                adj[i].push_back(j);
+
+    // Find triangles (3-cycles)
+    for (int a = 0; a < n && cuts_added < max_cuts; ++a) {
+        for (int b : adj[a]) {
+            if (b <= a) continue; // avoid duplicates
+            for (int c : adj[b]) {
+                if (c <= a) continue;
+                // Check if c -> a exists
+                bool ca_exists = false;
+                for (int nb : adj[c]) if (nb == a) { ca_exists = true; break; }
+                if (!ca_exists) continue;
+
+                // Cycle: a -> b -> c -> a
+                double cost = inp.cm[a][b] + inp.cm[b][c] + inp.cm[c][a];
+                // Fatigue-adjusted: conservative lower bound
+                double fat_cost = cost * (1.0 + inp.fatigue_rate / 2.0);
+                if (fat_cost <= B) continue;
+
+                // Check violation: sum x >= sum y (would need sum x <= sum y - 1)
+                double x_sum = lp.prim(lp.x_col[a][b]) + lp.prim(lp.x_col[b][c])
+                             + lp.prim(lp.x_col[c][a]);
+                double y_sum = lp.prim(lp.y_col[a]) + lp.prim(lp.y_col[b])
+                             + lp.prim(lp.y_col[c]);
+                if (x_sum <= y_sum - 1 + 1e-6) continue;
+
+                // Violated — add cut
+                std::vector<int> cols = {lp.x_col[a][b], lp.x_col[b][c], lp.x_col[c][a]};
+                std::vector<double> coeffs = {1.0, 1.0, 1.0};
+                // RHS: sum y_v - 1, so: sum x - sum y <= -1
+                cols.push_back(lp.y_col[a]); coeffs.push_back(-1.0);
+                cols.push_back(lp.y_col[b]); coeffs.push_back(-1.0);
+                cols.push_back(lp.y_col[c]); coeffs.push_back(-1.0);
+                lp.add_row(-1e30, -1.0, cols, coeffs);
+                ++cuts_added;
+                std::cerr << "  Cycle cover cut (3-cycle): nodes " << a << "," << b << "," << c
+                          << " cost=" << fat_cost << "\n";
+                if (cuts_added >= max_cuts) break;
+            }
+            if (cuts_added >= max_cuts) break;
+        }
+    }
+
+    // Find 4-cycles
+    for (int a = 0; a < n && cuts_added < max_cuts; ++a) {
+        for (int b : adj[a]) {
+            if (b == a) continue;
+            for (int c : adj[b]) {
+                if (c == a || c == b) continue;
+                for (int d : adj[c]) {
+                    if (d == a || d == b || d == c) continue;
+                    // Check if d -> a exists
+                    bool da_exists = false;
+                    for (int nb : adj[d]) if (nb == a) { da_exists = true; break; }
+                    if (!da_exists) continue;
+
+                    double cost = inp.cm[a][b] + inp.cm[b][c] + inp.cm[c][d] + inp.cm[d][a];
+                    double fat_cost = cost * (1.0 + inp.fatigue_rate / 2.0);
+                    if (fat_cost <= B) continue;
+
+                    double x_sum = lp.prim(lp.x_col[a][b]) + lp.prim(lp.x_col[b][c])
+                                 + lp.prim(lp.x_col[c][d]) + lp.prim(lp.x_col[d][a]);
+                    double y_sum = lp.prim(lp.y_col[a]) + lp.prim(lp.y_col[b])
+                                 + lp.prim(lp.y_col[c]) + lp.prim(lp.y_col[d]);
+                    if (x_sum <= y_sum - 1 + 1e-6) continue;
+
+                    std::vector<int> cols = {lp.x_col[a][b], lp.x_col[b][c],
+                                             lp.x_col[c][d], lp.x_col[d][a]};
+                    std::vector<double> coeffs = {1.0, 1.0, 1.0, 1.0};
+                    cols.push_back(lp.y_col[a]); coeffs.push_back(-1.0);
+                    cols.push_back(lp.y_col[b]); coeffs.push_back(-1.0);
+                    cols.push_back(lp.y_col[c]); coeffs.push_back(-1.0);
+                    cols.push_back(lp.y_col[d]); coeffs.push_back(-1.0);
+                    lp.add_row(-1e30, -1.0, cols, coeffs);
+                    ++cuts_added;
+                    std::cerr << "  Cycle cover cut (4-cycle): nodes "
+                              << a << "," << b << "," << c << "," << d
+                              << " cost=" << fat_cost << "\n";
+                    if (cuts_added >= max_cuts) goto done_cycles;
+                }
+            }
+        }
+    }
+    done_cycles:
+
+    if (cuts_added > 0)
+        std::cerr << "  Added " << cuts_added << " cycle cover cuts\n";
+    return cuts_added;
+}
+
+// ── Path Inequality Cuts (directed adaptation of Fischetti 1998) ───────────
+// For a directed path P = (i1 -> i2 -> ... -> ik) through non-depot nodes,
+// define W(P) = {v : depot -> i1 -> ... -> ik -> v -> depot fits in budget}.
+// Cut: sum_{arcs in P} x - sum_{v in V(P)} y + y_i1 + y_ik - sum_{v in W(P)} x_{ik,v} <= 0
+
+int find_and_add_path_cuts(LPModel& lp, const Input& inp, int max_cuts = 3) {
+    const int n = lp.n;
+    int cuts_added = 0;
+
+    // Build adjacency from fractional solution
+    struct ArcInfo { int to; double x_val; };
+    std::vector<std::vector<ArcInfo>> adj(n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (i != j && lp.x_col[i][j] >= 0) {
+                double xv = lp.prim(lp.x_col[i][j]);
+                if (xv > 0.1) adj[i].push_back({j, xv});
+            }
+
+    // Enumerate paths of length 2-4 starting from non-depot nodes
+    for (int i1 = 1; i1 < n && cuts_added < max_cuts; ++i1) {
+        if (lp.prim(lp.y_col[i1]) < 0.3) continue;
+
+        for (const auto& [i2, x12] : adj[i1]) {
+            if (i2 == 0) continue;
+
+            // Path of length 2: i1 -> i2
+            {
+                // Cost from depot to i1 to i2
+                double base_cost = inp.cm[0][i1] + inp.cm[i1][i2];
+                // Fatigue-adjusted path cost
+                double t0 = 0.0;
+                double fat_path = inp.cm[0][i1] * (1.0 + inp.fatigue_rate * t0 / inp.bud_raw);
+                double t1 = inp.cm[0][i1];
+                fat_path += inp.cm[i1][i2] * (1.0 + inp.fatigue_rate * t1 / inp.bud_raw);
+                double t2 = t1 + inp.cm[i1][i2];
+
+                // Find W(P): nodes v such that i2 -> v -> 0 fits remaining budget
+                double remaining = inp.bud_raw - fat_path;
+                std::vector<int> W;
+                for (int v = 1; v < n; ++v) {
+                    if (v == i1 || v == i2) continue;
+                    if (lp.x_col[i2][v] < 0) continue;
+                    double leg_iv = inp.cm[i2][v] * (1.0 + inp.fatigue_rate * t2 / inp.bud_raw);
+                    double t3 = t2 + inp.cm[i2][v];
+                    double leg_v0 = inp.cm[v][0] * (1.0 + inp.fatigue_rate * t3 / inp.bud_raw);
+                    if (leg_iv + leg_v0 <= remaining + 1e-9) W.push_back(v);
+                }
+
+                // Also check direct return: i2 -> 0
+                double direct_return = inp.cm[i2][0] * (1.0 + inp.fatigue_rate * t2 / inp.bud_raw);
+                bool can_return_direct = (direct_return <= remaining + 1e-9);
+
+                // If W is empty and can't return directly, the path is infeasible
+                // (handled by routing infeasibility cuts). Skip.
+                // Path cut is useful when W is small but non-empty.
+                if (W.empty() || can_return_direct) continue;
+
+                // Check violation:
+                // x_{i1,i2} - y_{i1} - y_{i2} + y_{i1} + y_{i2} - sum_{v in W} x_{i2,v} <= 0
+                // Simplifies to: x_{i1,i2} - sum_{v in W} x_{i2,v} <= 0
+                double lhs = lp.prim(lp.x_col[i1][i2]);
+                for (int v : W) lhs -= lp.prim(lp.x_col[i2][v]);
+                if (lhs <= 1e-6) continue;
+
+                // Violated — add cut
+                std::vector<int> cols = {lp.x_col[i1][i2]};
+                std::vector<double> coeffs = {1.0};
+                for (int v : W) {
+                    cols.push_back(lp.x_col[i2][v]);
+                    coeffs.push_back(-1.0);
+                }
+                lp.add_row(-1e30, 0.0, cols, coeffs);
+                ++cuts_added;
+                std::cerr << "  Path cut (len 2): " << i1 << "->" << i2
+                          << " W=" << W.size() << " viol=" << lhs << "\n";
+                if (cuts_added >= max_cuts) goto done_paths;
+            }
+
+            // Path of length 3: i1 -> i2 -> i3
+            for (const auto& [i3, x23] : adj[i2]) {
+                if (i3 == 0 || i3 == i1) continue;
+                if (cuts_added >= max_cuts) goto done_paths;
+
+                double t0 = 0.0;
+                double fat_path = inp.cm[0][i1] * (1.0 + inp.fatigue_rate * t0 / inp.bud_raw);
+                double t1 = inp.cm[0][i1];
+                fat_path += inp.cm[i1][i2] * (1.0 + inp.fatigue_rate * t1 / inp.bud_raw);
+                double t2 = t1 + inp.cm[i1][i2];
+                fat_path += inp.cm[i2][i3] * (1.0 + inp.fatigue_rate * t2 / inp.bud_raw);
+                double t3 = t2 + inp.cm[i2][i3];
+
+                double remaining = inp.bud_raw - fat_path;
+                if (remaining < 0) continue; // path itself exceeds budget
+
+                std::vector<int> W;
+                for (int v = 1; v < n; ++v) {
+                    if (v == i1 || v == i2 || v == i3) continue;
+                    if (lp.x_col[i3][v] < 0) continue;
+                    double leg_iv = inp.cm[i3][v] * (1.0 + inp.fatigue_rate * t3 / inp.bud_raw);
+                    double t4 = t3 + inp.cm[i3][v];
+                    double leg_v0 = inp.cm[v][0] * (1.0 + inp.fatigue_rate * t4 / inp.bud_raw);
+                    if (leg_iv + leg_v0 <= remaining + 1e-9) W.push_back(v);
+                }
+
+                double direct_return = inp.cm[i3][0] * (1.0 + inp.fatigue_rate * t3 / inp.bud_raw);
+                bool can_return_direct = (direct_return <= remaining + 1e-9);
+                if (W.empty() || can_return_direct) continue;
+
+                // Path inequality for P = (i1, i2, i3):
+                // x_{i1,i2} + x_{i2,i3} - y_{i1} - y_{i2} - y_{i3} + y_{i1} + y_{i3}
+                //   - sum_{v in W} x_{i3,v} <= 0
+                // Simplifies to: x_{i1,i2} + x_{i2,i3} - y_{i2} - sum_{v in W} x_{i3,v} <= 0
+                double lhs = lp.prim(lp.x_col[i1][i2]) + lp.prim(lp.x_col[i2][i3])
+                           - lp.prim(lp.y_col[i2]);
+                for (int v : W) lhs -= lp.prim(lp.x_col[i3][v]);
+                if (lhs <= 1e-6) continue;
+
+                std::vector<int> cols = {lp.x_col[i1][i2], lp.x_col[i2][i3]};
+                std::vector<double> coeffs = {1.0, 1.0};
+                cols.push_back(lp.y_col[i2]); coeffs.push_back(-1.0);
+                for (int v : W) {
+                    cols.push_back(lp.x_col[i3][v]);
+                    coeffs.push_back(-1.0);
+                }
+                lp.add_row(-1e30, 0.0, cols, coeffs);
+                ++cuts_added;
+                std::cerr << "  Path cut (len 3): " << i1 << "->" << i2 << "->" << i3
+                          << " W=" << W.size() << " viol=" << lhs << "\n";
+            }
+        }
+    }
+    done_paths:
+
+    if (cuts_added > 0)
+        std::cerr << "  Added " << cuts_added << " path cuts\n";
     return cuts_added;
 }
 
@@ -1154,6 +1406,13 @@ struct Solver {
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
 
+    // Ablation flags — toggle cut families on/off
+    bool use_tightened_coupling = true;
+    bool use_fatigue_covers = true;
+    bool use_routing_infeasibility = true;
+    bool use_cycle_covers = true;
+    bool use_path_ineq = true;
+
     explicit Solver(const Input& i) : inp(i) {
         root.build(inp);
     }
@@ -1233,9 +1492,19 @@ struct Solver {
             int cover_cuts = find_and_add_cover_cuts(lp, inp);
 
             // Routing infeasibility cuts (on y variables)
-            int routing_cuts = find_and_add_routing_cuts(lp, inp);
+            int routing_cuts = use_routing_infeasibility
+                ? find_and_add_routing_cuts(lp, inp) : 0;
 
-            if (subtours.empty() && cover_cuts == 0 && routing_cuts == 0) break;
+            // Cycle cover cuts (directed Fischetti 1998)
+            int cycle_cuts = use_cycle_covers
+                ? find_and_add_cycle_cover_cuts(lp, inp) : 0;
+
+            // Path inequality cuts (directed Fischetti 1998)
+            int path_cuts = use_path_ineq
+                ? find_and_add_path_cuts(lp, inp) : 0;
+
+            if (subtours.empty() && cover_cuts == 0 && routing_cuts == 0
+                && cycle_cuts == 0 && path_cuts == 0) break;
 
             for (const auto& S : subtours)
                 lp.add_sec(S);
@@ -1374,7 +1643,34 @@ struct MapResult {
 
 int main(int argc, char* argv[]) {
     std::string input_dir = "instances";
-    if (argc > 1) input_dir = argv[1];
+    std::string config_name = "all_cuts";
+    std::string csv_file;
+
+    // Parse command-line flags
+    bool flag_routing = true, flag_cycle = true, flag_path = true;
+    for (int a = 1; a < argc; ++a) {
+        std::string arg = argv[a];
+        if (arg == "--coupling=off")        g_use_tightened_coupling = false;
+        else if (arg == "--coupling=on")    g_use_tightened_coupling = true;
+        else if (arg == "--fatigue-covers=off") g_use_fatigue_covers = false;
+        else if (arg == "--fatigue-covers=on")  g_use_fatigue_covers = true;
+        else if (arg == "--routing=off")    flag_routing = false;
+        else if (arg == "--routing=on")     flag_routing = true;
+        else if (arg == "--cycle=off")      flag_cycle = false;
+        else if (arg == "--cycle=on")       flag_cycle = true;
+        else if (arg == "--path=off")       flag_path = false;
+        else if (arg == "--path=on")        flag_path = true;
+        else if (arg.rfind("--config=", 0) == 0) config_name = arg.substr(9);
+        else if (arg.rfind("--csv=", 0) == 0)    csv_file = arg.substr(6);
+        else input_dir = arg;
+    }
+
+    std::cerr << "Config: " << config_name
+              << " coupling=" << (g_use_tightened_coupling ? "on" : "off")
+              << " fatigue-covers=" << (g_use_fatigue_covers ? "on" : "off")
+              << " routing=" << (flag_routing ? "on" : "off")
+              << " cycle=" << (flag_cycle ? "on" : "off")
+              << " path=" << (flag_path ? "on" : "off") << "\n";
 
     // Scan input directory for op_input_*.json files
     std::vector<std::pair<std::string,std::string>> maps;
@@ -1403,30 +1699,45 @@ int main(int argc, char* argv[]) {
     std::vector<MapResult> results;
 
     for (const auto& [in, out] : maps) {
-        try { run_map(in, out); }
+        try {
+            std::cerr << "\n=== " << in << " ===\n";
+            Input inp = parse_input(read_file(in));
+
+            // SA
+            auto t0 = std::chrono::steady_clock::now();
+            auto sa_route = solve_sa_iterated(inp);
+            double sa_s = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            double sa_pts = 0;
+            for (int v : sa_route) sa_pts += inp.pts[v];
+
+            // B&C with ablation flags
+            auto t1 = std::chrono::steady_clock::now();
+            Solver solver(inp);
+            solver.use_routing_infeasibility = flag_routing;
+            solver.use_cycle_covers = flag_cycle;
+            solver.use_path_ineq = flag_path;
+            solver.solve(sa_pts, sa_route);
+            double bnc_s = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t1).count();
+
+            MapResult r;
+            std::string fname = std::filesystem::path(in).filename().string();
+            r.name = fname.substr(9, fname.size() - 14);
+            r.sa_pts = sa_pts;
+            r.sa_nodes = static_cast<int>(sa_route.size());
+            r.sa_s = sa_s;
+            r.bnc_pts = solver.best_pts;
+            r.bnc_nodes = static_cast<int>(solver.best_route.size());
+            r.bnc_s = bnc_s;
+            r.bnc_optimal = solver.proved_optimal;
+            r.gap_pct = solver.best_pts > 0
+                ? 100.0 * (solver.best_ub - solver.best_pts) / solver.best_pts : 0.0;
+            results.push_back(r);
+        }
         catch (const std::exception& e) {
             std::cerr << "Error on " << in << ": " << e.what() << '\n';
-            continue;
         }
-        try {
-            std::string js = read_file(out);
-            auto bnc_pos = js.find("\"bnc_sa\"");
-            std::string sa_blk  = js.substr(0, bnc_pos);
-            std::string bnc_blk = js.substr(bnc_pos);
-            MapResult r;
-            // Extract name from path
-            std::string fname = std::filesystem::path(in).filename().string();
-            r.name      = fname.substr(9, fname.size() - 14);
-            r.sa_pts    = json_val(sa_blk,  "pts");
-            r.sa_nodes  = static_cast<int>(json_val(sa_blk,  "nodes"));
-            r.sa_s      = json_val(sa_blk,  "elapsed_s");
-            r.bnc_pts   = json_val(bnc_blk, "pts");
-            r.bnc_nodes = static_cast<int>(json_val(bnc_blk, "nodes"));
-            r.bnc_s     = json_val(bnc_blk, "elapsed_s");
-            r.bnc_optimal = (bnc_blk.find("\"proved_optimal\": true") != std::string::npos);
-            r.gap_pct = json_val(bnc_blk, "gap_pct");
-            results.push_back(r);
-        } catch (...) {}
     }
 
     // ── Summary table ──
@@ -1451,13 +1762,33 @@ int main(int argc, char* argv[]) {
 
     // Summary stats
     int proven = 0, total = static_cast<int>(results.size());
-    double max_gap = 0;
+    double sum_gap = 0, max_gap = 0;
     for (const auto& r : results) {
         if (r.bnc_optimal) ++proven;
+        sum_gap += r.gap_pct;
         if (r.gap_pct > max_gap) max_gap = r.gap_pct;
     }
+    double mean_gap = total > 0 ? sum_gap / total : 0;
     std::cout << "\nProven optimal: " << proven << "/" << total
-              << "  Max gap: " << std::setprecision(2) << max_gap << "%\n";
+              << "  Mean gap: " << std::setprecision(2) << mean_gap << "%"
+              << "  Max gap: " << max_gap << "%\n";
+
+    // CSV output for batch collection
+    if (!csv_file.empty()) {
+        bool file_exists = std::filesystem::exists(csv_file);
+        std::ofstream csv(csv_file, std::ios::app);
+        if (!file_exists) {
+            csv << "config,instance,sa_pts,bnc_pts,gap_pct,optimal,time_s\n";
+        }
+        for (const auto& r : results) {
+            csv << config_name << "," << r.name << ","
+                << static_cast<int>(r.sa_pts) << ","
+                << static_cast<int>(r.bnc_pts) << ","
+                << std::fixed << std::setprecision(2) << r.gap_pct << ","
+                << (r.bnc_optimal ? "YES" : "no") << ","
+                << std::setprecision(1) << r.bnc_s << "\n";
+        }
+    }
 
     return 0;
 }
