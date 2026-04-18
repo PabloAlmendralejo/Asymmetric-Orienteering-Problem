@@ -995,6 +995,30 @@ Second, the flow formulation reduces asymmetry-related gaps substantially: from 
 Third, the fatigue dimension confirms the McCormick looseness under MTZ: the MTZ gap grows from 0.0\% ($\lambda = 0$) to 24.9\% ($\lambda = 0.3$), while the flow formulation shows a much smaller increase from 0.0\% to 14.5\%.
 Across all 21 instances, the flow formulation reduces the mean gap from 13.2\% to 6.3\% and proves 6 instances optimal versus 5 for MTZ, with a maximum gap of 15.2\% compared to 22.7\% for MTZ.
 
+\begin{table}[H]
+\centering
+\caption{Benchmark results: budget tightness and extreme cases ($n = 40$ unless noted).}
+\label{tab:bench_extra}
+\begin{tabular}{lrrcrrc}
+\toprule
+& & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-6}
+Instance & SA pts & gap & optimal? & gap & optimal? \\
+\midrule
+Loose budget          & 960  & 17.1\% & no  & 10.0\% & no \\
+Medium budget         & 680  & 26.2\% & no  &  7.8\% & no \\
+Tight budget          & 450  &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
+Symmetric easy ($n{=}20$, $\alpha{=}0$, $\lambda{=}0$) & 470 & 0.0\% & \textbf{YES} & 0.0\% & \textbf{YES} \\
+Asymmetric hard ($n{=}100$, $\alpha{=}0.5$, $\lambda{=}0.3$) & 1160 & 42.8\% & no & 15.2\% & no \\
+High asym., no fatigue ($\alpha{=}0.5$, $\lambda{=}0$) & 970 & 8.0\% & no & 0.0\% & \textbf{YES} \\
+Symmetric, high fatigue ($\alpha{=}0$, $\lambda{=}0.3$) & 850 & 22.8\% & no & 13.1\% & no \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The extreme cases highlight the flow formulation's strengths: the hardest instance (asymmetric hard) improves from 42.8\% to 15.2\%, and the high-asymmetry no-fatigue instance is newly proven optimal under the flow formulation.
+The medium-budget instance shows the largest single improvement (26.2\% $\to$ 7.8\%), while both formulations prove the tight-budget and symmetric-easy instances optimal.
+
 \begin{proposition}[Optimality certificate]
 \label{prop:optimality}
 Let $z^*_{\text{SA}}$ denote the objective value of the SA incumbent solution, and let $\mathcal{T}$ denote the Branch-and-Cut search tree.
@@ -1024,6 +1048,38 @@ When the algorithm terminates with an empty stack, every leaf of $\mathcal{T}$ h
 Since the branching is exhaustive (every fractional variable is eventually fixed to 0 or 1) and the union of all subtrees covers the entire feasible region of the AOPF, the incumbent at termination is a globally optimal solution.
 In particular, if the incumbent remains the SA solution $z^*_{\text{SA}}$, then no integer-feasible solution with objective value strictly greater than $z^*_{\text{SA}}$ exists.
 \end{proof}
+
+\subsection{Ablation Study: Effect of Cut Families}
+\label{sec:ablation}
+
+To quantify the marginal contribution of each cut family introduced in \cref{sec:separation}, we evaluate six cumulative configurations of the flow-based B\&C solver on the full benchmark suite of 21 instances.
+Each configuration adds one cut family to the previous one, using the same SA warm start and 900\,s time limit.
+\Cref{tab:ablation} reports the mean LP gap, number of instances proven optimal, and mean solving time for each configuration.
+
+\begin{table}[H]
+\centering
+\caption{Ablation study on the benchmark suite (21 instances, 900\,s time limit). Each row adds one cut family to the previous configuration. Gap is $100 \times (\bar{z} - z^*) / z^*$.}
+\label{tab:ablation}
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Config} & \textbf{Cuts enabled} & \textbf{Mean gap} & \textbf{Max gap} & \textbf{Optimal} & \textbf{Mean time (s)} \\
+\midrule
+1 & Base flow B\&C                          & 6.67\% & 15.17\% & 6/21 & 811 \\
+2 & + tightened coupling                    & 5.00\% & 10.46\% & 5/21 & 766 \\
+3 & + fatigue-aware covers                  & 4.78\% & 10.46\% & 7/21 & 731 \\
+4 & + routing infeasibility (B2)            & 4.71\% & 10.51\% & 7/21 & 693 \\
+5 & + cycle covers (B3) + path ineq.\ (B4) & 4.82\% & 10.51\% & 7/21 & 691 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% TODO: Fill table with ablation results and add interpretation paragraph.
+
+The tightened flow-arc coupling (config~2) provides the largest single improvement, reducing the mean gap from 6.67\% to 5.00\% and the maximum gap from 15.17\% to 10.46\%.
+Fatigue-aware covers (config~3) add a modest further reduction (5.00\% $\to$ 4.78\%) but prove two additional instances optimal, including the moderate-asymmetry instance (bench\_008, $\alpha = 0.10$) and the high-asymmetry-no-fatigue instance (bench\_020).
+The routing infeasibility cuts (config~4) reduce the mean gap slightly (4.78\% $\to$ 4.71\%) and notably tighten the hardest fatigue instance (bench\_014, $\lambda = 0.3$: 10.46\% $\to$ 8.30\%).
+Cycle cover and path inequality cuts (config~5) show no additional improvement on the synthetic benchmark, consistent with the absence of terrain-induced bottlenecks in the spatially uncorrelated cost matrices.
+Overall, the combined cuts reduce the mean gap by 28\% relative to the base flow B\&C (6.67\% $\to$ 4.82\%) and increase the number of proven-optimal instances from 6 to 7, while reducing mean solving time by 15\%.
 
 % ════════════════════════════════════════════════════════════════
 \section{Discussion}
