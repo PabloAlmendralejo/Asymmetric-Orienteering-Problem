@@ -1409,6 +1409,7 @@ struct Solver {
     // Ablation flags — toggle cut families on/off
     bool use_tightened_coupling = true;
     bool use_fatigue_covers = true;
+    bool use_covers = true;
     bool use_routing_infeasibility = true;
     bool use_cycle_covers = true;
     bool use_path_ineq = true;
@@ -1489,7 +1490,8 @@ struct Solver {
             auto mf_cuts = find_maxflow_cuts(lp);
             subtours.insert(subtours.end(), mf_cuts.begin(), mf_cuts.end());
 
-            int cover_cuts = find_and_add_cover_cuts(lp, inp);
+            int cover_cuts = use_covers
+                ? find_and_add_cover_cuts(lp, inp) : 0;
 
             // Routing infeasibility cuts (on y variables)
             int routing_cuts = use_routing_infeasibility
@@ -1647,13 +1649,15 @@ int main(int argc, char* argv[]) {
     std::string csv_file;
 
     // Parse command-line flags
-    bool flag_routing = true, flag_cycle = true, flag_path = true;
+    bool flag_covers = true, flag_routing = true, flag_cycle = true, flag_path = true;
     for (int a = 1; a < argc; ++a) {
         std::string arg = argv[a];
         if (arg == "--coupling=off")        g_use_tightened_coupling = false;
         else if (arg == "--coupling=on")    g_use_tightened_coupling = true;
         else if (arg == "--fatigue-covers=off") g_use_fatigue_covers = false;
         else if (arg == "--fatigue-covers=on")  g_use_fatigue_covers = true;
+        else if (arg == "--covers=off")     flag_covers = false;
+        else if (arg == "--covers=on")      flag_covers = true;
         else if (arg == "--routing=off")    flag_routing = false;
         else if (arg == "--routing=on")     flag_routing = true;
         else if (arg == "--cycle=off")      flag_cycle = false;
@@ -1668,6 +1672,7 @@ int main(int argc, char* argv[]) {
     std::cerr << "Config: " << config_name
               << " coupling=" << (g_use_tightened_coupling ? "on" : "off")
               << " fatigue-covers=" << (g_use_fatigue_covers ? "on" : "off")
+              << " covers=" << (flag_covers ? "on" : "off")
               << " routing=" << (flag_routing ? "on" : "off")
               << " cycle=" << (flag_cycle ? "on" : "off")
               << " path=" << (flag_path ? "on" : "off") << "\n";
@@ -1714,6 +1719,7 @@ int main(int argc, char* argv[]) {
             // B&C with ablation flags
             auto t1 = std::chrono::steady_clock::now();
             Solver solver(inp);
+            solver.use_covers = flag_covers;
             solver.use_routing_infeasibility = flag_routing;
             solver.use_cycle_covers = flag_cycle;
             solver.use_path_ineq = flag_path;

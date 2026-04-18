@@ -421,6 +421,14 @@ Flow is only permitted on active arcs:
   f_{ij} \leq B \cdot x_{ij} \qquad \forall\, (i,j) \in A
   \label{eq:flow_coupling}
 \end{equation}
+This basic coupling can be tightened by exploiting the structure of feasible routes.
+If arc $(i,j)$ is used, the cumulative base cost at node $i$ is at least $C_{0i}$ (the direct cost from the depot) and at most $B - C_{ij} - C_{j0}$ (the maximum that still allows traversing $(i,j)$ and returning to the depot within budget).
+Since $f_{ij} = t_i \cdot x_{ij}$, where $t_i$ denotes the cumulative base cost at node $i$, these bounds yield:
+\begin{equation}
+  C_{0i} \cdot x_{ij} \leq f_{ij} \leq (B - C_{ij} - C_{j0}) \cdot x_{ij} \qquad \forall\, (i,j) \in A,\; i \neq 0
+  \label{eq:flow_coupling_tight}
+\end{equation}
+The tightened coupling~\eqref{eq:flow_coupling_tight} reduces the LP relaxation's freedom to assign unrealistic flow values to fractional arcs, producing a tighter upper bound without affecting integer-feasible solutions.
 
 \paragraph{Time flow conservation.}
 At each non-depot node $j$, the incoming time (flow plus arc traversal cost) equals the outgoing flow:
@@ -577,11 +585,19 @@ Two complementary procedures are applied:
 \end{enumerate}
 This two-phase separation is essential for the asymmetric OP\@: Kosaraju detects closed subtours, while the reverse BFS catches paths that leave the depot but cannot return.
 
+\paragraph{Max-flow connectivity cuts.}
+The rounding-based separation above (using threshold $x_{ij}^* > 0.5$) may miss violated connectivity cuts when the fractional arc values are spread thinly.
+To strengthen the separation, for each visited node $k$ with $y_k^* > 0.1$, a max-flow computation (Dinic's algorithm) is performed from the depot to $k$ on the fractional support graph, using $x_{ij}^*$ as arc capacities.
+If the max-flow value is less than $y_k^*$, the min-cut identifies a subset $S$ with $k \in S$ and $0 \notin S$ for which the connectivity cut~\eqref{eq:outcut} is violated.
+This exact separation complements the heuristic rounding-based approach and is particularly effective on asymmetric instances where fractional flow is distributed across many arcs.
+
 \paragraph{(B1) Cover cuts.}
 Arcs with $x_{ij}^* > 0$ are sorted by decreasing $x_{ij}^*$ and accumulated greedily until their total base cost exceeds $B$.
 The resulting set $\mathcal{C}$ defines a violated cover if $\sum_{(i,j) \in \mathcal{C}} x_{ij}^* > |\mathcal{C}| - 1$, i.e., the LP uses more of these arcs than any feasible solution allows.
 Each violated cover is optionally strengthened via sequential lifting.
 Up to 3 cover cuts are added per cut-loop iteration; adding more would slow the LP solve without proportional improvement in the bound.
+To account for fatigue, the arc weights used in the greedy accumulation are inflated from the base cost $C_{ij}$ to $C_{ij}(1 + \lambda\, C_{0i} / B)$, reflecting the minimum possible fatigue cost of each arc (since the earliest arrival at node $i$ is $C_{0i}$).
+This produces smaller covers---fewer arcs are needed to exceed $B$---yielding tighter inequalities.
 
 \paragraph{(B2) Routing infeasibility cuts.}
 Nodes with $y_i^* > 0.5$ are sorted by decreasing $y_i^*$ and added one by one to a candidate set $Q$.
@@ -743,8 +759,10 @@ The algorithm proceeds as follows:
     \If{$\bar{z} \leq z^* + \varepsilon$} \textbf{prune and continue} \EndIf
     \State Find violated SECs via Kosaraju SCC
     \State Find depot-unreachable nodes via reverse BFS
+    \State Find violated max-flow connectivity cuts
+    \State Find violated budget-based cuts (B1--B4, \cref{sec:separation})
     \If{no violations found} \textbf{break} \EndIf
-    \State Add SECs and connectivity cuts
+    \State Add all violated cuts to LP
   \EndFor
   \If{solution is integer-feasible}
     \State Extract route, validate fatigue feasibility
@@ -1060,26 +1078,26 @@ Each configuration adds one cut family to the previous one, using the same SA wa
 \centering
 \caption{Ablation study on the benchmark suite (21 instances, 900\,s time limit). Each row adds one cut family to the previous configuration. Gap is $100 \times (\bar{z} - z^*) / z^*$.}
 \label{tab:ablation}
-\begin{tabular}{llrrrr}
+\small
+\begin{tabular}{clrrrr}
 \toprule
-\textbf{Config} & \textbf{Cuts enabled} & \textbf{Mean gap} & \textbf{Max gap} & \textbf{Optimal} & \textbf{Mean time (s)} \\
+ & \textbf{Cuts enabled} & \textbf{Mean} & \textbf{Max} & \textbf{Opt.} & \textbf{Time} \\
+ &  & \textbf{gap} & \textbf{gap} &  & \textbf{(s)} \\
 \midrule
-1 & Base flow B\&C                          & 6.67\% & 15.17\% & 6/21 & 811 \\
-2 & + tightened coupling                    & 5.00\% & 10.46\% & 5/21 & 766 \\
-3 & + fatigue-aware covers                  & 4.78\% & 10.46\% & 7/21 & 731 \\
-4 & + routing infeasibility (B2)            & 4.71\% & 10.51\% & 7/21 & 693 \\
-5 & + cycle covers (B3) + path ineq.\ (B4) & 4.82\% & 10.51\% & 7/21 & 691 \\
+1 & Base (SECs + conn.\ + tight.\ + fat.)  & ---\% & ---\% & --/21 & --- \\
+2 & Base + B1 (covers)                      & ---\% & ---\% & --/21 & --- \\
+3 & Base + B2 (routing infeas.)             & ---\% & ---\% & --/21 & --- \\
+4 & Base + B3 (cycle covers)                & ---\% & ---\% & --/21 & --- \\
+5 & Base + B4 (path ineq.)                  & ---\% & ---\% & --/21 & --- \\
+6 & Base + all (B1--B4)                     & ---\% & ---\% & --/21 & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 % TODO: Fill table with ablation results and add interpretation paragraph.
 
-The tightened flow-arc coupling (config~2) provides the largest single improvement, reducing the mean gap from 6.67\% to 5.00\% and the maximum gap from 15.17\% to 10.46\%.
-Fatigue-aware covers (config~3) add a modest further reduction (5.00\% $\to$ 4.78\%) but prove two additional instances optimal, including the moderate-asymmetry instance (bench\_008, $\alpha = 0.10$) and the high-asymmetry-no-fatigue instance (bench\_020).
-The routing infeasibility cuts (config~4) reduce the mean gap slightly (4.78\% $\to$ 4.71\%) and notably tighten the hardest fatigue instance (bench\_014, $\lambda = 0.3$: 10.46\% $\to$ 8.30\%).
-Cycle cover and path inequality cuts (config~5) show no additional improvement on the synthetic benchmark, consistent with the absence of terrain-induced bottlenecks in the spatially uncorrelated cost matrices.
-Overall, the combined cuts reduce the mean gap by 28\% relative to the base flow B\&C (6.67\% $\to$ 4.82\%) and increase the number of proven-optimal instances from 6 to 7, while reducing mean solving time by 15\%.
+% TODO: Fill table with new ablation results and update interpretation paragraph.
+% New structure: base (no B1-B4), then each B1-B4 individually, then all combined.
 
 % ════════════════════════════════════════════════════════════════
 \section{Discussion}

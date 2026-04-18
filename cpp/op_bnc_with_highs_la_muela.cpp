@@ -17,6 +17,7 @@
 #include <random>
 #include <iomanip>
 #include <set>
+#include <filesystem>
 #include "interfaces/highs_c_api.h"
 #include "lp_data/HConst.h"
 //  #include "glpk.h"
@@ -584,6 +585,11 @@ int find_and_add_cover_cuts(LPModel& lp, const Input& inp, int max_covers = 3) {
             if (val < 1e-6) continue;
             double w = inp.cm[i][j];
             if (!std::isfinite(w) || w <= 0) continue;
+            // Fatigue-aware weight: minimum possible fatigue cost of this arc
+            if (inp.fatigue_rate > 0 && i > 0
+                && std::isfinite(inp.cm[0][i]) && inp.cm[0][i] > 0) {
+                w *= (1.0 + inp.fatigue_rate * inp.cm[0][i] / inp.bud_raw);
+            }
             arcs.push_back({lp.x_col[i][j], w, val});
         }
 
@@ -637,6 +643,413 @@ int find_and_add_cover_cuts(LPModel& lp, const Input& inp, int max_covers = 3) {
         std::cerr << "  Added " << cuts_added << " cover cuts\n";
     return cuts_added;
 }
+
+double hungarian(const std::vector<std::vector<double>>& cost) {
+    const int n = static_cast<int>(cost.size());
+    if (n == 0) return 0.0;
+    // Pad to 1-indexed
+    const double INF = 1e18;
+    std::vector<double> u(n + 1, 0), v(n + 1, 0);
+    std::vector<int> p(n + 1, 0), way(n + 1, 0);
+
+    for (int i = 1; i <= n; ++i) {
+        p[0] = i;
+        int j0 = 0;
+        std::vector<double> minv(n + 1, INF);
+        std::vector<bool> used(n + 1, false);
+        do {
+            used[j0] = true;
+            int i0 = p[j0], j1 = 0;
+            double delta = INF;
+            for (int j = 1; j <= n; ++j) {
+                if (used[j]) continue;
+                double cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+            }
+            for (int j = 0; j <= n; ++j) {
+                if (used[j]) { u[p[j]] += delta; v[j] -= delta; }
+                else { minv[j] -= delta; }
+            }
+            j0 = j1;
+        } while (p[j0] != 0);
+        do {
+            int j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+        } while (j0);
+    }
+    double total = 0.0;
+    for (int j = 1; j <= n; ++j)
+        total += cost[p[j] - 1][j - 1];
+    return total;
+}
+
+// ── Routing Infeasibility Cuts ─────────────────────────────────────────────
+// For a subset S of nodes, if the assignment relaxation lower bound on the
+// cost of any cycle through S ∪ {depot} exceeds the budget B, then
+// sum_{i in S} y_i <= |S| - 1 is a valid inequality.
+
+int find_and_add_routing_cuts(LPModel& lp, const Input& inp, int max_cuts = 3) {
+    const int n = lp.n;
+    int cuts_added = 0;
+
+    // Collect nodes the LP wants to visit, sorted by y* descending
+    struct NodeInfo { int id; double y_val; };
+    std::vector<NodeInfo> candidates;
+    for (int i = 1; i < n; ++i) {
+        double yv = lp.prim(lp.y_col[i]);
+        if (yv > 0.5) candidates.push_back({i, yv});
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const NodeInfo& a, const NodeInfo& b) { return a.y_val > b.y_val; });
+
+    if (candidates.size() < 3) return 0;
+
+    // Greedily build infeasible sets
+    std::vector<int> S_nodes;
+    S_nodes.push_back(0); // depot always included in the assignment
+
+    for (const auto& c : candidates) {
+        S_nodes.push_back(c.id);
+
+        if (S_nodes.size() < 4) continue; // need at least depot + 3 nodes
+
+        // Build cost submatrix for S_nodes
+        int sz = static_cast<int>(S_nodes.size());
+        std::vector<std::vector<double>> sub_cost(sz, std::vector<double>(sz, 1e18));
+        for (int i = 0; i < sz; ++i)
+            for (int j = 0; j < sz; ++j) {
+                if (i == j) { sub_cost[i][j] = 1e18; continue; }
+                double cij = inp.cm[S_nodes[i]][S_nodes[j]];
+                if (std::isfinite(cij)) sub_cost[i][j] = cij;
+            }
+
+        double ap_cost = hungarian(sub_cost);
+
+        // Conservative fatigue adjustment: average fatigue multiplier is (1 + lambda/2)
+        double fatigue_lb = ap_cost * (1.0 + inp.fatigue_rate / 2.0);
+
+        if (fatigue_lb > inp.bud_raw) {
+            // Check if the cut is violated: sum y_i > |S| - 1
+            // S is S_nodes without depot
+            std::vector<int> S_only; // nodes without depot
+            double y_sum = 0.0;
+            for (int k = 1; k < sz; ++k) { // skip depot at index 0
+                S_only.push_back(S_nodes[k]);
+                y_sum += lp.prim(lp.y_col[S_nodes[k]]);
+            }
+            int S_size = static_cast<int>(S_only.size());
+
+            if (y_sum > S_size - 1 + 1e-6) {
+                // Try to minimize S: remove nodes with smallest y* while still infeasible
+                for (int attempt = 0; attempt < S_size && S_only.size() > 2; ++attempt) {
+                    // Find node with smallest y* in S_only
+                    int min_idx = 0;
+                    double min_y = lp.prim(lp.y_col[S_only[0]]);
+                    for (int k = 1; k < (int)S_only.size(); ++k) {
+                        double yk = lp.prim(lp.y_col[S_only[k]]);
+                        if (yk < min_y) { min_y = yk; min_idx = k; }
+                    }
+                    // Try removing it
+                    std::vector<int> trial = {0}; // depot
+                    for (int k = 0; k < (int)S_only.size(); ++k)
+                        if (k != min_idx) trial.push_back(S_only[k]);
+
+                    int tsz = static_cast<int>(trial.size());
+                    std::vector<std::vector<double>> tc(tsz, std::vector<double>(tsz, 1e18));
+                    for (int i = 0; i < tsz; ++i)
+                        for (int j = 0; j < tsz; ++j) {
+                            if (i == j) continue;
+                            double cij = inp.cm[trial[i]][trial[j]];
+                            if (std::isfinite(cij)) tc[i][j] = cij;
+                        }
+                    double trial_cost = hungarian(tc) * (1.0 + inp.fatigue_rate / 2.0);
+                    if (trial_cost > inp.bud_raw) {
+                        // Still infeasible, keep the removal
+                        S_only.erase(S_only.begin() + min_idx);
+                    } else {
+                        break; // Can't shrink further
+                    }
+                }
+
+                // Recheck violation after shrinking
+                double y_sum2 = 0.0;
+                for (int node : S_only) y_sum2 += lp.prim(lp.y_col[node]);
+                int S2 = static_cast<int>(S_only.size());
+
+                if (y_sum2 > S2 - 1 + 1e-6) {
+                    // Add cut: sum y_i <= |S| - 1
+                    std::vector<int> cols;
+                    std::vector<double> coeffs;
+                    for (int node : S_only) {
+                        cols.push_back(lp.y_col[node]);
+                        coeffs.push_back(1.0);
+                    }
+                    lp.add_row(-1e30, static_cast<double>(S2 - 1), cols, coeffs);
+                    ++cuts_added;
+                    std::cerr << "  Routing infeasibility cut: " << S2
+                              << " nodes, violation=" << (y_sum2 - (S2 - 1)) << "\n";
+                    if (cuts_added >= max_cuts) break;
+                }
+            }
+            // Reset and try a different starting point
+            S_nodes.clear();
+            S_nodes.push_back(0);
+        }
+    }
+
+    if (cuts_added > 0)
+        std::cerr << "  Added " << cuts_added << " routing infeasibility cuts\n";
+    return cuts_added;
+}
+
+// ── Cycle Cover Cuts (directed adaptation of Fischetti 1998) ───────────────
+// If a set of directed arcs F forms a cycle with total cost > B, then:
+//   sum_{(i,j) in F} x_ij <= sum_{v in V(F)} y_v - 1
+
+int find_and_add_cycle_cover_cuts(LPModel& lp, const Input& inp, int max_cuts = 3) {
+    const int n = lp.n;
+    double B = inp.bud_raw;
+    int cuts_added = 0;
+
+    // Enumerate short directed cycles (length 3-5) in the support graph
+    // For each cycle, check if cost > B and inequality is violated
+
+    // Build adjacency from fractional solution
+    std::vector<std::vector<int>> adj(n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (i != j && lp.x_col[i][j] >= 0 && lp.prim(lp.x_col[i][j]) > 0.1)
+                adj[i].push_back(j);
+
+    // Find triangles (3-cycles)
+    for (int a = 0; a < n && cuts_added < max_cuts; ++a) {
+        for (int b : adj[a]) {
+            if (b <= a) continue; // avoid duplicates
+            for (int c : adj[b]) {
+                if (c <= a) continue;
+                // Check if c -> a exists
+                bool ca_exists = false;
+                for (int nb : adj[c]) if (nb == a) { ca_exists = true; break; }
+                if (!ca_exists) continue;
+
+                // Cycle: a -> b -> c -> a
+                double cost = inp.cm[a][b] + inp.cm[b][c] + inp.cm[c][a];
+                // Fatigue-adjusted: conservative lower bound
+                double fat_cost = cost * (1.0 + inp.fatigue_rate / 2.0);
+                if (fat_cost <= B) continue;
+
+                // Check violation: sum x >= sum y (would need sum x <= sum y - 1)
+                double x_sum = lp.prim(lp.x_col[a][b]) + lp.prim(lp.x_col[b][c])
+                             + lp.prim(lp.x_col[c][a]);
+                double y_sum = lp.prim(lp.y_col[a]) + lp.prim(lp.y_col[b])
+                             + lp.prim(lp.y_col[c]);
+                if (x_sum <= y_sum - 1 + 1e-6) continue;
+
+                // Violated — add cut
+                std::vector<int> cols = {lp.x_col[a][b], lp.x_col[b][c], lp.x_col[c][a]};
+                std::vector<double> coeffs = {1.0, 1.0, 1.0};
+                // RHS: sum y_v - 1, so: sum x - sum y <= -1
+                cols.push_back(lp.y_col[a]); coeffs.push_back(-1.0);
+                cols.push_back(lp.y_col[b]); coeffs.push_back(-1.0);
+                cols.push_back(lp.y_col[c]); coeffs.push_back(-1.0);
+                lp.add_row(-1e30, -1.0, cols, coeffs);
+                ++cuts_added;
+                std::cerr << "  Cycle cover cut (3-cycle): nodes " << a << "," << b << "," << c
+                          << " cost=" << fat_cost << "\n";
+                if (cuts_added >= max_cuts) break;
+            }
+            if (cuts_added >= max_cuts) break;
+        }
+    }
+
+    // Find 4-cycles
+    for (int a = 0; a < n && cuts_added < max_cuts; ++a) {
+        for (int b : adj[a]) {
+            if (b == a) continue;
+            for (int c : adj[b]) {
+                if (c == a || c == b) continue;
+                for (int d : adj[c]) {
+                    if (d == a || d == b || d == c) continue;
+                    // Check if d -> a exists
+                    bool da_exists = false;
+                    for (int nb : adj[d]) if (nb == a) { da_exists = true; break; }
+                    if (!da_exists) continue;
+
+                    double cost = inp.cm[a][b] + inp.cm[b][c] + inp.cm[c][d] + inp.cm[d][a];
+                    double fat_cost = cost * (1.0 + inp.fatigue_rate / 2.0);
+                    if (fat_cost <= B) continue;
+
+                    double x_sum = lp.prim(lp.x_col[a][b]) + lp.prim(lp.x_col[b][c])
+                                 + lp.prim(lp.x_col[c][d]) + lp.prim(lp.x_col[d][a]);
+                    double y_sum = lp.prim(lp.y_col[a]) + lp.prim(lp.y_col[b])
+                                 + lp.prim(lp.y_col[c]) + lp.prim(lp.y_col[d]);
+                    if (x_sum <= y_sum - 1 + 1e-6) continue;
+
+                    std::vector<int> cols = {lp.x_col[a][b], lp.x_col[b][c],
+                                             lp.x_col[c][d], lp.x_col[d][a]};
+                    std::vector<double> coeffs = {1.0, 1.0, 1.0, 1.0};
+                    cols.push_back(lp.y_col[a]); coeffs.push_back(-1.0);
+                    cols.push_back(lp.y_col[b]); coeffs.push_back(-1.0);
+                    cols.push_back(lp.y_col[c]); coeffs.push_back(-1.0);
+                    cols.push_back(lp.y_col[d]); coeffs.push_back(-1.0);
+                    lp.add_row(-1e30, -1.0, cols, coeffs);
+                    ++cuts_added;
+                    std::cerr << "  Cycle cover cut (4-cycle): nodes "
+                              << a << "," << b << "," << c << "," << d
+                              << " cost=" << fat_cost << "\n";
+                    if (cuts_added >= max_cuts) goto done_cycles;
+                }
+            }
+        }
+    }
+    done_cycles:
+
+    if (cuts_added > 0)
+        std::cerr << "  Added " << cuts_added << " cycle cover cuts\n";
+    return cuts_added;
+}
+
+// ── Path Inequality Cuts (directed adaptation of Fischetti 1998) ───────────
+// For a directed path P = (i1 -> i2 -> ... -> ik) through non-depot nodes,
+// define W(P) = {v : depot -> i1 -> ... -> ik -> v -> depot fits in budget}.
+// Cut: sum_{arcs in P} x - sum_{v in V(P)} y + y_i1 + y_ik - sum_{v in W(P)} x_{ik,v} <= 0
+
+int find_and_add_path_cuts(LPModel& lp, const Input& inp, int max_cuts = 3) {
+    const int n = lp.n;
+    int cuts_added = 0;
+
+    // Build adjacency from fractional solution
+    struct ArcInfo { int to; double x_val; };
+    std::vector<std::vector<ArcInfo>> adj(n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (i != j && lp.x_col[i][j] >= 0) {
+                double xv = lp.prim(lp.x_col[i][j]);
+                if (xv > 0.1) adj[i].push_back({j, xv});
+            }
+
+    // Enumerate paths of length 2-4 starting from non-depot nodes
+    for (int i1 = 1; i1 < n && cuts_added < max_cuts; ++i1) {
+        if (lp.prim(lp.y_col[i1]) < 0.3) continue;
+
+        for (const auto& [i2, x12] : adj[i1]) {
+            if (i2 == 0) continue;
+
+            // Path of length 2: i1 -> i2
+            {
+                // Cost from depot to i1 to i2
+                double base_cost = inp.cm[0][i1] + inp.cm[i1][i2];
+                // Fatigue-adjusted path cost
+                double t0 = 0.0;
+                double fat_path = inp.cm[0][i1] * (1.0 + inp.fatigue_rate * t0 / inp.bud_raw);
+                double t1 = inp.cm[0][i1];
+                fat_path += inp.cm[i1][i2] * (1.0 + inp.fatigue_rate * t1 / inp.bud_raw);
+                double t2 = t1 + inp.cm[i1][i2];
+
+                // Find W(P): nodes v such that i2 -> v -> 0 fits remaining budget
+                double remaining = inp.bud_raw - fat_path;
+                std::vector<int> W;
+                for (int v = 1; v < n; ++v) {
+                    if (v == i1 || v == i2) continue;
+                    if (lp.x_col[i2][v] < 0) continue;
+                    double leg_iv = inp.cm[i2][v] * (1.0 + inp.fatigue_rate * t2 / inp.bud_raw);
+                    double t3 = t2 + inp.cm[i2][v];
+                    double leg_v0 = inp.cm[v][0] * (1.0 + inp.fatigue_rate * t3 / inp.bud_raw);
+                    if (leg_iv + leg_v0 <= remaining + 1e-9) W.push_back(v);
+                }
+
+                // Also check direct return: i2 -> 0
+                double direct_return = inp.cm[i2][0] * (1.0 + inp.fatigue_rate * t2 / inp.bud_raw);
+                bool can_return_direct = (direct_return <= remaining + 1e-9);
+
+                // If W is empty and can't return directly, the path is infeasible
+                // (handled by routing infeasibility cuts). Skip.
+                // Path cut is useful when W is small but non-empty.
+                if (W.empty() || can_return_direct) continue;
+
+                // Check violation:
+                // x_{i1,i2} - y_{i1} - y_{i2} + y_{i1} + y_{i2} - sum_{v in W} x_{i2,v} <= 0
+                // Simplifies to: x_{i1,i2} - sum_{v in W} x_{i2,v} <= 0
+                double lhs = lp.prim(lp.x_col[i1][i2]);
+                for (int v : W) lhs -= lp.prim(lp.x_col[i2][v]);
+                if (lhs <= 1e-6) continue;
+
+                // Violated — add cut
+                std::vector<int> cols = {lp.x_col[i1][i2]};
+                std::vector<double> coeffs = {1.0};
+                for (int v : W) {
+                    cols.push_back(lp.x_col[i2][v]);
+                    coeffs.push_back(-1.0);
+                }
+                lp.add_row(-1e30, 0.0, cols, coeffs);
+                ++cuts_added;
+                std::cerr << "  Path cut (len 2): " << i1 << "->" << i2
+                          << " W=" << W.size() << " viol=" << lhs << "\n";
+                if (cuts_added >= max_cuts) goto done_paths;
+            }
+
+            // Path of length 3: i1 -> i2 -> i3
+            for (const auto& [i3, x23] : adj[i2]) {
+                if (i3 == 0 || i3 == i1) continue;
+                if (cuts_added >= max_cuts) goto done_paths;
+
+                double t0 = 0.0;
+                double fat_path = inp.cm[0][i1] * (1.0 + inp.fatigue_rate * t0 / inp.bud_raw);
+                double t1 = inp.cm[0][i1];
+                fat_path += inp.cm[i1][i2] * (1.0 + inp.fatigue_rate * t1 / inp.bud_raw);
+                double t2 = t1 + inp.cm[i1][i2];
+                fat_path += inp.cm[i2][i3] * (1.0 + inp.fatigue_rate * t2 / inp.bud_raw);
+                double t3 = t2 + inp.cm[i2][i3];
+
+                double remaining = inp.bud_raw - fat_path;
+                if (remaining < 0) continue; // path itself exceeds budget
+
+                std::vector<int> W;
+                for (int v = 1; v < n; ++v) {
+                    if (v == i1 || v == i2 || v == i3) continue;
+                    if (lp.x_col[i3][v] < 0) continue;
+                    double leg_iv = inp.cm[i3][v] * (1.0 + inp.fatigue_rate * t3 / inp.bud_raw);
+                    double t4 = t3 + inp.cm[i3][v];
+                    double leg_v0 = inp.cm[v][0] * (1.0 + inp.fatigue_rate * t4 / inp.bud_raw);
+                    if (leg_iv + leg_v0 <= remaining + 1e-9) W.push_back(v);
+                }
+
+                double direct_return = inp.cm[i3][0] * (1.0 + inp.fatigue_rate * t3 / inp.bud_raw);
+                bool can_return_direct = (direct_return <= remaining + 1e-9);
+                if (W.empty() || can_return_direct) continue;
+
+                // Path inequality for P = (i1, i2, i3):
+                // x_{i1,i2} + x_{i2,i3} - y_{i1} - y_{i2} - y_{i3} + y_{i1} + y_{i3}
+                //   - sum_{v in W} x_{i3,v} <= 0
+                // Simplifies to: x_{i1,i2} + x_{i2,i3} - y_{i2} - sum_{v in W} x_{i3,v} <= 0
+                double lhs = lp.prim(lp.x_col[i1][i2]) + lp.prim(lp.x_col[i2][i3])
+                           - lp.prim(lp.y_col[i2]);
+                for (int v : W) lhs -= lp.prim(lp.x_col[i3][v]);
+                if (lhs <= 1e-6) continue;
+
+                std::vector<int> cols = {lp.x_col[i1][i2], lp.x_col[i2][i3]};
+                std::vector<double> coeffs = {1.0, 1.0};
+                cols.push_back(lp.y_col[i2]); coeffs.push_back(-1.0);
+                for (int v : W) {
+                    cols.push_back(lp.x_col[i3][v]);
+                    coeffs.push_back(-1.0);
+                }
+                lp.add_row(-1e30, 0.0, cols, coeffs);
+                ++cuts_added;
+                std::cerr << "  Path cut (len 3): " << i1 << "->" << i2 << "->" << i3
+                          << " W=" << W.size() << " viol=" << lhs << "\n";
+            }
+        }
+    }
+    done_paths:
+
+    if (cuts_added > 0)
+        std::cerr << "  Added " << cuts_added << " path cuts\n";
+    return cuts_added;
+}
+
 
 // ── Route extraction & validation ──────────────────────────────────────────
 
@@ -864,8 +1277,6 @@ struct Solver {
 
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
-    int nodes_explored = 0;
-    int nodes_unexplored = 0;
 
     explicit Solver(const Input& i) : inp(i) {
         root.build(inp);
@@ -906,8 +1317,6 @@ struct Solver {
             process_node(std::move(node), node_stack);
         }
         proved_optimal = node_stack.empty() && nodes < 10000;
-        nodes_explored = nodes;
-        nodes_unexplored = static_cast<int>(node_stack.size());
         if (proved_optimal) {
             best_ub = best_pts;
         } else {
@@ -919,9 +1328,8 @@ struct Solver {
             }
         }
         double gap_pct = best_pts > 0 ? 100.0 * (best_ub - best_pts) / best_pts : 0.0;
-        std::cerr << "Explored: " << nodes_explored << ", Unexplored: " << nodes_unexplored
-                  << ", best: " << best_pts << " pts, UB: " << best_ub
-                  << ", gap: " << gap_pct << "%\n";
+        std::cerr << "Processed " << nodes << " nodes, best: " << best_pts
+                  << " pts, UB: " << best_ub << ", gap: " << gap_pct << "%\n";
     }
 
     void process_node(BNCNode node, std::stack<BNCNode>& node_stack) {
@@ -944,7 +1352,17 @@ struct Solver {
 
             int cover_cuts = find_and_add_cover_cuts(lp, inp);
 
-            if (subtours.empty() && cover_cuts == 0) break;
+            // Routing infeasibility cuts (B2)
+            int routing_cuts = find_and_add_routing_cuts(lp, inp);
+
+            // Cycle cover cuts (B3)
+            int cycle_cuts = find_and_add_cycle_cover_cuts(lp, inp);
+
+            // Path inequality cuts (B4)
+            int path_cuts = find_and_add_path_cuts(lp, inp);
+
+            if (subtours.empty() && cover_cuts == 0 && routing_cuts == 0
+                && cycle_cuts == 0 && path_cuts == 0) break;
 
             for (const auto& S : subtours)
                 lp.add_sec(S);
@@ -1028,8 +1446,6 @@ static void run_map(const std::string& in_path, const std::string& out_path) {
         << ", \"proved_optimal\": " << (solver.proved_optimal ? "true" : "false")
         << ", \"best_ub\": " << solver.best_ub
         << ", \"gap_pct\": " << (solver.best_pts > 0 ? 100.0 * (solver.best_ub - solver.best_pts) / solver.best_pts : 0.0)
-        << ", \"nodes_explored\": " << solver.nodes_explored
-        << ", \"nodes_unexplored\": " << solver.nodes_unexplored
         << ", \"base_cost\": " << bnc_base
         << ", \"fatigue_cost\": " << bnc_fatigue << ", \"route\": [";
     for (size_t i = 0; i < solver.best_route.size(); ++i) { if (i) out << ", "; out << solver.best_route[i]; }

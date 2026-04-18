@@ -19,26 +19,52 @@ This creates 21 instances varying:
 
 ## Solvers
 
-Two solver variants are provided:
+Four solver variants are provided:
 
-| Solver | File | Formulation |
+| Solver | File | Description |
 |---|---|---|
-| Original B&C | `benchmark_solver.cpp` | MTZ time propagation + McCormick linearisation of fatigue |
-| Flow B&C | `benchmark_solver_flow.cpp` | Single-commodity flow variables, fatigue budget is linear (no McCormick) |
+| MTZ B&C | `benchmark_solver.cpp` | MTZ time propagation + McCormick linearisation of fatigue |
+| Flow B&C | `benchmark_solver_flow.cpp` | Single-commodity flow variables + tightened coupling + fatigue-aware covers + routing infeasibility cuts (B2) |
+| Flow B&C v2 | `benchmark_solver_flow_v2.cpp` | Flow B&C + cycle cover cuts (B3) + path inequality cuts (B4) |
+| Ablation | `benchmark_solver_ablation.cpp` | Flow B&C with command-line flags to toggle each cut family on/off |
 
 All solvers share the same SA warm-start (seed 42, deterministic) for fair comparison.
 
 ### Compile and run
 
 ```bash
-# Original B&C
+# MTZ B&C
 cl.exe /O2 /std:c++20 /EHsc benchmark_solver.cpp /I<highs_include> /link highs.lib /out:benchmark_solver.exe
 benchmark_solver.exe instances
 
 # Flow B&C
 cl.exe /O2 /std:c++20 /EHsc benchmark_solver_flow.cpp /I<highs_include> /link highs.lib /out:benchmark_solver_flow.exe
 benchmark_solver_flow.exe instances
+
+# Ablation (with flags)
+cl.exe /O2 /std:c++20 /EHsc benchmark_solver_ablation.cpp /I<highs_include> /link highs.lib /out:benchmark_solver_ablation.exe
+benchmark_solver_ablation.exe instances --config=all --coupling=on --fatigue-covers=on --routing=on --cycle=on --path=on --csv=results.csv
 ```
+
+### Ablation study
+
+The ablation solver supports the following flags (all default to `on`):
+
+| Flag | Controls |
+|---|---|
+| `--coupling=on/off` | Tightened flow-arc coupling bounds |
+| `--fatigue-covers=on/off` | Fatigue-aware cover cut weights |
+| `--routing=on/off` | Routing infeasibility cuts (B2) |
+| `--cycle=on/off` | Directed cycle cover cuts (B3) |
+| `--path=on/off` | Directed path inequality cuts (B4) |
+| `--config=<name>` | Label for CSV output |
+| `--csv=<file>` | Append results to CSV file |
+
+Run the full ablation study with:
+```bash
+run_ablation.bat
+```
+This runs 5 cumulative configurations across all 21 instances and writes results to `ablation_results.csv`.
 
 ## Heuristic comparison
 
