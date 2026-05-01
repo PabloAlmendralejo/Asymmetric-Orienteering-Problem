@@ -810,10 +810,9 @@ The B\&C algorithm admits two complementary node selection strategies, and we em
 \emph{Best-first search} (BFS) maintains nodes on a priority queue ordered by the LP upper bound and always processes the node most likely to improve the global bound; it minimises the number of nodes examined to close the optimality gap at the cost of slower incumbent discovery.
 This tradeoff between depth-first and best-first node selection is a well-studied aspect of branch-and-bound design; \citet{linderoth1999computational} provide a comprehensive computational study of search strategies for mixed integer programming and document that the relative effectiveness of DFS and BFS depends on instance characteristics such as bound quality and tree size.
 
-For the real-terrain instances ($n \leq 40$, tight LP relaxation due to cost asymmetry and fatigue coupling), we use DFS with strong branching over 20 candidates up to depth 8.
-The LP bound at the root is already close to the optimum, so few candidate nodes remain after pruning; DFS's dive-and-prune pattern empties the tree quickly and proves optimality.
-For the benchmark suite (up to $n = 100$, looser LP relaxation at larger scales), we use BFS with strong branching over 15 candidates up to depth 6.
-Many nodes carry similar bounds, so DFS would spend time on deep branches that do not improve the global bound; BFS instead focuses computational effort where it reduces the gap fastest.
+For the real-terrain instances ($n \leq 40$) we use DFS, and for the benchmark suite (up to $n = 100$) we use BFS.
+In preliminary experiments the DFS configuration proved more terrain instances optimal, while the BFS configuration yielded lower mean optimality gaps on the larger benchmark problems.
+Both configurations share the same formulation, cut families, and warm-start heuristic.
 
 Both strategies use the same formulation, the same cut families, and the same warm-start heuristic; only the node selection rule and the strong-branching parameters differ.
 This allows a clean decomposition of the gains from formulation, cuts, and search strategy, as reported in the results below.
