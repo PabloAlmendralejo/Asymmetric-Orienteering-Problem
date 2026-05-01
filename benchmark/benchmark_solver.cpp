@@ -1355,14 +1355,7 @@ struct Solver {
             // Routing infeasibility cuts (B2)
             int routing_cuts = find_and_add_routing_cuts(lp, inp);
 
-            // Cycle cover cuts (B3)
-            int cycle_cuts = find_and_add_cycle_cover_cuts(lp, inp);
-
-            // Path inequality cuts (B4)
-            int path_cuts = find_and_add_path_cuts(lp, inp);
-
-            if (subtours.empty() && cover_cuts == 0 && routing_cuts == 0
-                && cycle_cuts == 0 && path_cuts == 0) break;
+            if (subtours.empty() && cover_cuts == 0 && routing_cuts == 0) break;
 
             for (const auto& S : subtours)
                 lp.add_sec(S);
