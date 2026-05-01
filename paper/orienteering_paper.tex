@@ -808,7 +808,7 @@ Key implementation details:
 The B\&C algorithm admits two complementary node selection strategies, and we employ each on the instance class where it is most effective.
 \emph{Depth-first search} (DFS) maintains nodes on a stack and always processes the most recently pushed child; it descends quickly into promising subtrees, finds integer-feasible improvements early, and prunes the remaining tree once a strong incumbent is established.
 \emph{Best-first search} (BFS) maintains nodes on a priority queue ordered by the LP upper bound and always processes the node most likely to improve the global bound; it minimises the number of nodes examined to close the optimality gap at the cost of slower incumbent discovery.
-This dichotomy is discussed at length by \citet{linderoth1999computational}, who show that no single strategy dominates across problem classes.
+This tradeoff between depth-first and best-first node selection is a well-studied aspect of branch-and-bound design; \citet{linderoth1999computational} provide a comprehensive computational study of search strategies for mixed integer programming and document that the relative effectiveness of DFS and BFS depends on instance characteristics such as bound quality and tree size.
 
 For the real-terrain instances ($n \leq 40$, tight LP relaxation due to cost asymmetry and fatigue coupling), we use DFS with strong branching over 20 candidates up to depth 8.
 The LP bound at the root is already close to the optimum, so few candidate nodes remain after pruning; DFS's dive-and-prune pattern empties the tree quickly and proves optimality.
