@@ -1,6 +1,5 @@
-\documentclass[11pt,a4paper]{article}
+\documentclass[preprint,11pt]{elsarticle}
 
-% ── Packages ──
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{amsmath,amssymb,amsthm}
@@ -9,44 +8,54 @@
 \usepackage{algpseudocode}
 \usepackage{booktabs}
 \usepackage{graphicx}
-\usepackage[margin=2.5cm]{geometry}
 \usepackage{hyperref}
 \usepackage{cleveref}
-\usepackage{natbib}
 \usepackage{enumitem}
 \usepackage{subcaption}
 \usepackage{xcolor}
 \usepackage{float}
 \usepackage{multirow}
+\usepackage{setspace}
+\setstretch{1.5}
+
+\biboptions{authoryear,round}
 
 \providecommand{\doi}[1]{\href{https://doi.org/#1}{\texttt{doi:#1}}}
 
 \newtheorem{definition}{Definition}
 \newtheorem{proposition}{Proposition}
 
-\title{Optimal Route Planning for Orienteering Races on Real Terrain:\\
-An Integrated Cost Surface and Branch-and-Cut Approach}
-
-\author{
-  Pablo Borrego Ramos\thanks{Independent Researcher.}
-}
-
-\date{\today}
+\journal{European Journal of Operational Research}
 
 \begin{document}
-\maketitle
+
+\begin{frontmatter}
+
+\title{Optimal Route Planning for Orienteering Races on Real Terrain:
+An Integrated Cost Surface and Branch-and-Cut Approach}
+
+\author[aff1]{Pablo Borrego Ramos\corref{cor1}}
+\ead{pablo.borrego@example.com}
+\cortext[cor1]{Corresponding author. Tel.: +XX-XXX-XXXXXXX.}
+
+\address[aff1]{Independent Researcher, Spain}
 
 \begin{abstract}
 We present an end-to-end computational framework for provably optimal route planning in orienteering races on real terrain.
 A GIS pipeline combines IOF map symbols, DEM-derived morphometry, and the Minetti metabolic model into a fully asymmetric cost matrix, where directional slope costs and cumulative fatigue make travel cost depend on both direction and elapsed effort.
-The terrain realities captured by this pipeline---asymmetry, fatigue, and heterogeneous surface costs---lead naturally to a new problem variant, the Asymmetric Orienteering Problem with Fatigue (AOPF), for which we develop tailored exact solution methods.
+The terrain realities captured by this pipeline lead naturally to the Asymmetric Orienteering Problem with Fatigue (AOPF), for which we develop tailored exact solution methods.
 We propose two LP formulations: an MTZ-based model with McCormick linearisation and a single-commodity flow formulation where the fatigue budget is natively linear.
-We strengthen the Branch-and-Cut solver with routing infeasibility cuts, a novel family of pure node-variable inequalities based on the assignment relaxation, alongside tightened flow-arc coupling bounds, fatigue-aware lifted covers, and directed adaptations of cycle cover and path inequalities.
-We validate the framework on two Spanish terrains across seven control-point distributions each, and release a parameterised benchmark suite of 21 instances for the asymmetric OP with fatigue.
-The flow-based B\&C certifies global optimality on 9 of 14 real-terrain instances within a 15-minute time limit, with tighter LP gaps than the MTZ formulation (mean gap 5.4\% vs.\ 16.0\% on benchmark instances).
+We strengthen the Branch-and-Cut solver with routing infeasibility cuts, a novel family of pure node-variable inequalities based on the assignment relaxation, alongside tightened flow-arc coupling bounds and fatigue-aware lifted covers.
+We validate the framework on two Spanish terrains across seven control-point distributions each, and release a parameterised benchmark suite of 21 instances.
+The flow-based solver certifies global optimality on 9 of 14 real-terrain instances within 15 minutes, with substantially tighter LP gaps than the MTZ formulation.
 \end{abstract}
 
-\noindent\textbf{Keywords:} orienteering problem, asymmetric routing, cumulative fatigue, branch-and-cut, valid inequalities, flow formulation, terrain cost surface, Minetti metabolic model
+\begin{keyword}
+Branch-and-cut \sep Orienteering problem \sep Valid inequalities \sep Asymmetric routing \sep Terrain cost surface
+\end{keyword}
+
+\end{frontmatter}
+
 
 % ════════════════════════════════════════════════════════════════
 \section{Introduction}
@@ -88,43 +97,18 @@ The remainder of this paper is organised as follows.
 % ════════════════════════════════════════════════════════════════
 \section{Related Work}
 \label{sec:related}
-% ════════════════════════════════════════════════════════════════
 
 \paragraph{The Orienteering Problem.}
-The OP was introduced by \citet{tsiligirides1984heuristic} and has since generated a substantial body of literature.
-\citet{vansteenwegen2011orienteering} provide a comprehensive survey covering exact methods, heuristics, and variants including the Team OP, OP with Time Windows, and stochastic OP.
-Exact approaches typically employ branch-and-bound or branch-and-cut on integer programming formulations \citep{fischetti1998solving,gendreau1998generalized}.
-Most formulations assume symmetric distances derived from Euclidean or road-network metrics.
-\citet{gunawan2016orienteering} extend the survey to recent variants and applications, noting that terrain-aware formulations remain scarce.
-Most recently, \citet{kobeaga2021revisited} proposed a revisited B\&C algorithm for large-scale symmetric OP instances (up to 7{,}397 nodes), incorporating shrinking techniques for subtour elimination, blossom separation heuristics for comb inequalities, efficient variable pricing, and a structured separation loop.
-Their component evaluation methodology---systematically enabling and disabling algorithmic components to measure marginal contributions---informs the ablation study in the present work.
-Our formulation differs fundamentally in addressing asymmetric costs and cumulative fatigue, which preclude the use of undirected comb inequalities and require the flow-based linearisation developed here.
+The OP was introduced by \citet{tsiligirides1984heuristic}; \citet{vansteenwegen2011orienteering} and \citet{gunawan2016orienteering} survey exact methods, heuristics, and variants.
+Exact approaches typically employ branch-and-cut \citep{fischetti1998solving,gendreau1998generalized}; most formulations assume symmetric Euclidean distances.
+\citet{kobeaga2021revisited} proposed a revisited B\&C for large-scale symmetric instances, whose component evaluation methodology informs our ablation study.
+Our formulation differs fundamentally in addressing asymmetric costs and cumulative fatigue, which preclude undirected comb inequalities and require the flow-based linearisation developed here.
 
-\paragraph{Metaheuristics for the OP.}
-Given the NP-hardness of the OP, metaheuristics are widely used for practical instances.
-Simulated Annealing \citep{kirkpatrick1983sa}, Genetic Algorithms \citep{tasgetiren2002ga_op}, and Ant Colony Optimisation \citep{ke2008aco_op} have all been applied.
-\citet{vansteenwegen2009iterated} propose an iterated local search that is competitive with exact methods on benchmark instances.
-Our SA implementation incorporates Or-opt moves and stagnation detection, with parameters tuned via grid search over 1{,}000 random instances.
-
-\paragraph{Terrain cost modelling.}
-Least-cost path (LCP) analysis on terrain has a long history in GIS.
-\citet{tobler1993} proposed the hiking function relating slope to walking speed, which remains widely used despite known limitations on steep descents.
-\citet{minetti2002} measured the metabolic cost of locomotion across a wide range of slopes, producing a fifth-degree polynomial that better captures the energetics of both ascent and descent.
-\citet{rees2004} compared several slope-speed models and found significant differences in predicted travel times.
-
-\paragraph{Orienteering map cost surfaces.}
-\citet{ica2021lcp} introduced a GIS-based approach to route planning on orienteering maps, assigning travel speeds to IOF symbol categories and computing least-cost paths.
-They proposed the Hypsometry Cost Raster (HCR) combining terrain ruggedness, plan curvature, and slope magnitude to capture morphometric difficulty not represented by map symbols.
-Our work extends their approach by: (i)~replacing Tobler's hiking function with the Minetti metabolic model for directional slope costs, (ii)~proposing IQR-based scaling instead of histogram mode matching for ACR-HCR fusion, and (iii)~coupling the cost surface with an exact OP solver rather than point-to-point LCP analysis.
-
-\paragraph{Asymmetric and state-dependent routing.}
-The Asymmetric Travelling Salesman Problem (ATSP) has a rich polyhedral theory, including directed subtour elimination constraints and facet-defining inequalities such as the $D_k^+$ and odd-CAT families \citep{fischetti1991atsp,fischetti1997atsp}.
-Our directed SECs and connectivity cuts follow the standard ATSP formulation; the budget-based cuts (B1--B4) are specific to the selective (orienteering) setting where node visits are optional.
-The fatigue model in the AOPF makes arc costs state-dependent: the effective cost of traversing an arc depends on the cumulative cost elapsed along the route.
-State-dependent travel costs arise in several routing contexts, including load-dependent vehicle routing \citep{bektas2011pollution}, time-dependent VRP \citep{malandraki1992timedep}, and energy-minimising routing \citep{kara2007energy}.
-In these problems, the bilinear interaction between a state variable and arc selection creates linearisation challenges analogous to our fatigue term; our flow-based formulation addresses this without McCormick envelopes.
-The OP is a member of the broader family of TSP with Profits \citep{feillet2005tsp_profits}, which includes the prize-collecting TSP and the profitable tour problem.
-To the best of our knowledge, no prior work in this family addresses position-dependent cumulative fatigue costs with exact methods.
+\paragraph{Terrain cost modelling and asymmetric routing.}
+\citet{tobler1993} proposed the hiking function relating slope to speed; \citet{minetti2002} measured metabolic cost across slopes via a fifth-degree polynomial that better captures ascent and descent energetics.
+\citet{ica2021lcp} introduced a GIS-based approach to OP route planning using the Hypsometry Cost Raster (HCR); we extend their work by replacing Tobler's function with the Minetti model, proposing IQR-based raster fusion, and coupling the cost surface with an exact solver.
+The ATSP polyhedral theory \citep{fischetti1991atsp,fischetti1997atsp} underpins our directed SECs.
+The fatigue model makes arc costs state-dependent, analogous to load-dependent \citep{bektas2011pollution} and time-dependent VRP \citep{malandraki1992timedep}; to the best of our knowledge, no prior work addresses position-dependent cumulative fatigue with exact methods.
 
 % ════════════════════════════════════════════════════════════════
 \section{Cost Surface Model}
@@ -638,120 +622,14 @@ If $W(P)$ is non-empty (otherwise the path is infeasible and handled by other cu
 \subsection{Simulated Annealing (SA)}
 \label{sec:sa}
 
-\paragraph{Method selection.}
-The SA metaheuristic was selected after a comparative study on 21 benchmark instances across varying sizes ($n = 20$--$100$), asymmetry levels, and fatigue rates.
-Four methods were evaluated with equal computational budget (2 seconds per method per instance, 10 independent seeds for stochastic methods): Greedy Insertion (deterministic), Genetic Algorithm (GA, population 50), Ant Colony Optimisation (ACO, 30 ants), and Simulated Annealing (SA).
+The B\&C is warm-started by an iterated Simulated Annealing (SA) metaheuristic.
+SA was selected after comparing Greedy Insertion, Genetic Algorithm, and Ant Colony Optimisation under equal 2-second budgets across 21 benchmark instances; SA outperformed all alternatives (Wilcoxon signed-rank, all $p < 0.001$).
 
-\begin{table}[H]
-\centering
-\caption{Heuristic comparison: mean gap below SA (\%) across 21 benchmark instances (equal 2\,s time budget, 10 seeds per stochastic method). All differences are statistically significant (Wilcoxon signed-rank, $p < 0.001$).}
-\label{tab:heuristic_comparison}
-\begin{tabular}{lrrrr}
-\toprule
-\textbf{Method} & \textbf{Mean gap} & \textbf{Std} & \textbf{Min gap} & \textbf{Max gap} \\
-\midrule
-Greedy  & 23.0\% &  9.4\% &  3.7\% & 40.0\% \\
-GA      & 49.2\% & 11.0\% & 24.6\% & 71.9\% \\
-ACO     &  8.1\% &  4.9\% &  1.3\% & 24.1\% \\
-SA      &  ---   & ---    &  ---   & ---    \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-SA significantly outperforms all three alternatives under equal time budgets (Wilcoxon signed-rank test, $n = 21$ instances, all $p < 0.001$; SA achieves a higher mean score than each competitor on all 21 instances).
-The GA performs worst (48.4\% below SA on average), as crossover on directed routes frequently produces infeasible offspring requiring expensive repair, and the rugged fitness landscape under asymmetric costs degrades convergence.
-ACO is the closest competitor (5.7\% below SA) but its pheromone mechanism weakens on asymmetric instances where edge quality is context-dependent on elapsed time and travel direction---the gap widens to 20.9\% on the hardest instance.
-Greedy Insertion (21.0\% below SA) is fast but myopic, committing to locally attractive nodes without ability to backtrack.
-
-SA's advantage stems from its single-solution trajectory search: it evaluates each candidate move in full context (current route, elapsed time, fatigue state, directional costs) without needing to decompose the solution into reusable components.
-The Or-opt and swap moves are particularly effective on asymmetric instances because they directly evaluate the actual cost change of rearranging the visit sequence, naturally accounting for directionality.
-
-\paragraph{Parameter tuning.}
-The SA parameters were fine-tuned via grid search over a separate set of 1{,000 synthetic instances with randomised control-point distributions across both study areas.}
-The tunable parameters and their search ranges were:
-\begin{itemize}[nosep]
-  \item Initial temperature $T_0 \in \{50, 100, 200, 500\}$
-  \item Final temperature $T_{\text{end}} \in \{0.01, 0.1, 1.0\}$
-  \item Number of iterations $N_{\text{iter}} \in \{20000, 40000, 80000, 120000\}$
-  \item Number of restarts $N_{\text{restart}} \in \{4, 8, 12, 20\}$
-  \item Move probabilities $(p_{\text{remove}}, p_{\text{insert}}, p_{\text{or-opt}}, p_{\text{swap}})$, tested in 10 configurations
-  \item Or-opt segment length $L_{\text{seg}} \in \{1\text{--}2, 1\text{--}3, 1\text{--}4\}$
-  \item Stagnation limit as fraction of $N_{\text{iter}}$: $\{1/3, 1/4, 1/5, 1/6\}$
-\end{itemize}
-
-The best configuration, used throughout the experiments, is: $T_0 = 100$, $T_{\text{end}} = 0.1$, move probabilities $(0.30, 0.30, 0.20, 0.20)$, $L_{\text{seg}} \in \{1,2,3\}$, and stagnation limit $N_{\text{iter}}/5$.
-The number of iterations and restarts are auto-calibrated based on instance size $n$:
-\begin{align}
-  N_{\text{iter}} &= \text{clip}(2500n,\; 10000,\; 120000) \\
-  N_{\text{restart}} &= \text{clip}(3000/n,\; 40,\; 200)
-\end{align}
-The rationale is as follows.
-The neighbourhood size grows with $n$: more nodes means more possible insertions, removals, and swaps per iteration, so the search space requires proportionally more iterations to explore.
-The linear scaling $2500n$ was determined empirically during grid search as the point where additional iterations yielded diminishing returns on solution quality.
-The lower bound of $10{,}000$ ensures sufficient exploration even for very small instances, while the upper bound of $120{,}000$ caps runtime.
-
-Conversely, restarts scale inversely with $n$: for small instances ($n \leq 15$), the search space is compact and a single SA run converges quickly, so diversity across restarts (up to 20) is more valuable than depth within a single run.
-For large instances ($n \geq 40$), each restart is expensive and the search space is rich enough that a single long run explores effectively, so fewer restarts (minimum 4) suffice.
-The total computational effort $N_{\text{iter}} \times N_{\text{restart}}$ remains approximately constant across instance sizes, keeping the SA runtime predictable.
-
-The cooling schedule is geometric: $T_k = T_0 \cdot \rho^k$ with decay rate $\rho = (T_{\text{end}}/T_0)^{1/N_{\text{iter}}}$.
-
-\paragraph{Neighbourhood structure.}
-Starting from a greedy insertion solution, the SA applies four neighbourhood moves with the tuned probabilities:
-\begin{enumerate}[nosep]
-  \item \textbf{Remove} ($p = 0.30$): delete a random node from the route.
-  \item \textbf{Insert} ($p = 0.30$): add an unvisited node at its best position (minimum cost increase, computed in $O(k)$ where $k$ is the current route length).
-  \item \textbf{Or-opt} ($p = 0.20$): extract a segment of 1--3 nodes and reinsert at a different position.
-  \item \textbf{Swap} ($p = 0.20$): exchange a visited node for an unvisited one.
-\end{enumerate}
-
-Moves that violate the fatigue budget ($D^f(\sigma') > B$) are rejected.
-The search terminates early if no improvement is found for $N_{\text{iter}}/5$ consecutive iterations (stagnation detection).
-
-The full procedure, including the iterated multi-restart wrapper, is given in \cref{alg:sa}.
-
-\begin{algorithm}[H]
-\caption{Iterated Simulated Annealing for AOPF}
-\label{alg:sa}
-\begin{algorithmic}[1]
-\Require Cost matrix $\mathbf{C}$, scores $\mathbf{p}$, budget $B$, fatigue rate $\lambda$
-\Ensure Best route $\sigma^*$
-\State $\sigma^* \gets \emptyset$, $z^* \gets 0$
-\State Compute $N_{\text{iter}} \gets \text{clip}(2500n, 10000, 120000)$
-\State Compute $N_{\text{restart}} \gets \text{clip}(3000/n, 40, 200)$
-\For{$r = 1, \ldots, N_{\text{restart}}$}
-  \State $\sigma \gets \textsc{GreedyInsertion}(\mathbf{C}, \mathbf{p}, B)$
-  \State $z \gets \sum_{i \in \sigma} p_i$, \; $T \gets T_0$, \; $\rho \gets (T_{\text{end}}/T_0)^{1/N_{\text{iter}}}$, \; $s \gets 0$
-  \For{$k = 1, \ldots, N_{\text{iter}}$}
-    \If{$s \geq N_{\text{iter}}/5$} \textbf{break} \Comment{Stagnation}
-    \EndIf
-    \State $T \gets T \cdot \rho$
-    \State Draw $u \sim \text{Uniform}(0,1)$
-    \If{$u < 0.30$}
-      \State $\sigma' \gets \textsc{Remove}(\sigma)$ \Comment{Delete random node}
-    \ElsIf{$u < 0.60$}
-      \State $\sigma' \gets \textsc{Insert}(\sigma)$ \Comment{Add node at best position}
-    \ElsIf{$u < 0.80$}
-      \State $\sigma' \gets \textsc{OrOpt}(\sigma)$ \Comment{Relocate segment of 1--3 nodes}
-    \Else
-      \State $\sigma' \gets \textsc{Swap}(\sigma)$ \Comment{Exchange visited $\leftrightarrow$ unvisited}
-    \EndIf
-    \If{$D^f(\sigma') > B$}
-      \State $s \gets s + 1$; \textbf{continue} \Comment{Infeasible move}
-    \EndIf
-    \State $z' \gets \sum_{i \in \sigma'} p_i$, \; $\Delta \gets z' - z$
-    \If{$\Delta > 0$ \textbf{or} $\exp(\Delta / T) > \text{Uniform}(0,1)$}
-      \State $\sigma \gets \sigma'$, \; $z \gets z'$
-      \If{$z > z^*$} $z^* \gets z$, \; $\sigma^* \gets \sigma$, \; $s \gets 0$
-      \Else \; $s \gets s + 1$
-      \EndIf
-    \Else \; $s \gets s + 1$
-    \EndIf
-  \EndFor
-\EndFor
-\State \Return $\sigma^*$
-\end{algorithmic}
-\end{algorithm}
+Starting from a greedy insertion solution, the SA applies four neighbourhood moves: Remove ($p = 0.30$), Insert ($p = 0.30$), Or-opt on segments of 1--3 nodes ($p = 0.20$), and Swap ($p = 0.20$).
+Moves violating the fatigue budget are rejected.
+The number of iterations and restarts are auto-calibrated as $N_{\text{iter}} = \text{clip}(2500n, 10000, 120000)$ and $N_{\text{restart}} = \text{clip}(3000/n, 40, 200)$, keeping total effort approximately constant across instance sizes.
+Parameters ($T_0 = 100$, $T_{\text{end}} = 0.1$, geometric cooling) were tuned via grid search over 1{,}000 synthetic instances.
+The search terminates early on stagnation (no improvement for $N_{\text{iter}}/5$ consecutive iterations).
 
 \subsection{Branch-and-Cut (B\&C)}
 \label{sec:bnc}
@@ -801,47 +679,6 @@ Key implementation details:
   \item Maximum branching depth is capped at $D_{\max} = 15$.
   \item Time limit $T_{\max} = 900$\,s (15 minutes).
 \end{itemize}
-
-\subsection{Node Selection Strategy}
-\label{sec:node-selection}
-
-The B\&C algorithm admits two complementary node selection strategies, and we employ each on the instance class where it is most effective.
-\emph{Depth-first search} (DFS) maintains nodes on a stack and always processes the most recently pushed child; it descends quickly into promising subtrees, finds integer-feasible improvements early, and prunes the remaining tree once a strong incumbent is established.
-\emph{Best-first search} (BFS) maintains nodes on a priority queue ordered by the LP upper bound and always processes the node most likely to improve the global bound; it minimises the number of nodes examined to close the optimality gap at the cost of slower incumbent discovery.
-This dichotomy is discussed at length by \citet{linderoth1999computational}, who show that no single strategy dominates across problem classes.
-
-For the real-terrain instances ($n \leq 40$, tight LP relaxation due to cost asymmetry and fatigue coupling), we use DFS with strong branching over 20 candidates up to depth 8.
-The LP bound at the root is already close to the optimum, so few candidate nodes remain after pruning; DFS's dive-and-prune pattern empties the tree quickly and proves optimality.
-For the benchmark suite (up to $n = 100$, looser LP relaxation at larger scales), we use BFS with strong branching over 15 candidates up to depth 6.
-Many nodes carry similar bounds, so DFS would spend time on deep branches that do not improve the global bound; BFS instead focuses computational effort where it reduces the gap fastest.
-
-Both strategies use the same formulation, the same cut families, and the same warm-start heuristic; only the node selection rule and the strong-branching parameters differ.
-This allows a clean decomposition of the gains from formulation, cuts, and search strategy, as reported in the results below.
-
-% ════════════════════════════════════════════════════════════════
-\section{Computational Pipeline}
-\label{sec:pipeline}
-% ════════════════════════════════════════════════════════════════
-
-The full pipeline consists of two stages:
-
-\paragraph{Stage 1: Cost Surface Generation (Python).}
-\begin{enumerate}[nosep]
-  \item Parse OMAP file $\to$ rasterise symbols onto UTM grid $\to$ ACR.
-  \item Load DTM, compute TRI, PC, SLO $\to$ normalise $\to$ HCR (\cref{eq:hcr}).
-  \item Scale HCR via IQR ratio (\cref{eq:iqr}), merge with ACR (\cref{eq:combined}).
-  \item Compute directional slopes from DTM.
-  \item Run anisotropic Dijkstra from each node with Minetti factors.
-  \item Export asymmetric cost matrix, scores, and budget as JSON.
-\end{enumerate}
-
-\paragraph{Stage 2: Route Optimisation (C++).}
-\begin{enumerate}[nosep]
-  \item Parse JSON input.
-  \item Run iterated SA $\to$ warm-start solution.
-  \item Build LP model with HiGHS, run B\&C (\cref{alg:bnc}).
-  \item Report solution, optimality status, and timing.
-\end{enumerate}
 
 % ════════════════════════════════════════════════════════════════
 \section{Experimental Setup}
@@ -920,7 +757,7 @@ A gap of 0.0\% with ``YES'' indicates that the B\&C has proven the SA solution t
 
 \begin{table}[H]
 \centering
-\caption{Torremocha results: SA and B\&C under both formulations (IQR scaling $c = 0.87$, cost asymmetry $\mathcal{A} = 16.1\%$). B\&C uses depth-first search (see \cref{sec:node-selection}).}
+\caption{Torremocha results: SA and B\&C under both formulations (IQR scaling $c = 0.87$, cost asymmetry $\mathcal{A} = 16.1\%$).}
 \label{tab:torremocha}
 \begin{tabular}{lrrrrcrrc}
 \toprule
@@ -946,7 +783,7 @@ The flow formulation produces substantially tighter gaps on the unproven instanc
 
 \begin{table}[H]
 \centering
-\caption{La Muela results: SA and B\&C under both formulations (IQR scaling $c = 2.18$, cost asymmetry $\mathcal{A} = 50.0\%$). B\&C uses depth-first search (see \cref{sec:node-selection}).}
+\caption{La Muela results: SA and B\&C under both formulations (IQR scaling $c = 2.18$, cost asymmetry $\mathcal{A} = 50.0\%$).}
 \label{tab:lamuela}
 \begin{tabular}{lrrrrcrrc}
 \toprule
@@ -1108,7 +945,7 @@ Each configuration adds one cut family to the previous one, using the same SA wa
 
 \begin{table}[H]
 \centering
-\caption{Ablation study on the benchmark suite (21 instances, 900\,s time limit). Each row adds one cut family to the previous configuration. B\&C uses best-first search (see \cref{sec:node-selection}). Gap is $100 \times (\bar{z} - z^*) / z^*$.}
+\caption{Ablation study on the benchmark suite (21 instances, 900\,s time limit). Each row adds one cut family to the previous configuration. Gap is $100 \times (\bar{z} - z^*) / z^*$.}
 \label{tab:ablation}
 \small
 \begin{tabular}{clrrrr}
@@ -1125,11 +962,11 @@ Each configuration adds one cut family to the previous one, using the same SA wa
 \end{tabular}
 \end{table}
 
-The base configuration---comprising subtour elimination, connectivity cuts, tightened flow-arc coupling, and fatigue-aware cover weighting---proves 6 of 21 instances optimal with a mean gap of 5.54\%.
-Adding B1 (lifted cover cuts) proves one additional instance (bench\_020, high asymmetry, no fatigue) but slightly increases the mean gap to 5.85\% due to the overhead of cover separation on harder instances.
-B2 (routing infeasibility cuts) reduces the mean gap to 5.41\% without changing the number of optimal solutions, confirming that the Hungarian-based separation tightens bounds on non-optimal instances.
-B3 (cycle cover cuts) yields the lowest mean gap (5.35\%) and the fastest mean time on bench\_020 (690\,s vs.\ 838\,s with B1+B2 alone).
-B4 (path inequalities) provides no further improvement: the mean gap increases slightly to 5.42\% and bench\_020 narrowly misses the time limit (gap $< 0.1\%$), suggesting that the additional LP overhead outweighs the tightening effect.
+The base configuration proves 6 of 21 instances optimal with a mean gap of 5.54\%.
+Adding B1 (lifted cover cuts) proves one additional instance but slightly increases the mean gap due to separation overhead.
+B2 (routing infeasibility cuts) reduces the mean gap to 5.41\% without changing the number of optimal solutions.
+B3 (cycle cover cuts) yields the lowest mean gap (5.35\%).
+B4 (path inequalities) provides no further improvement, with the mean gap increasing slightly to 5.42\%.
 
 % ════════════════════════════════════════════════════════════════
 \section{Discussion}
@@ -1137,8 +974,7 @@ B4 (path inequalities) provides no further improvement: the mean gap increases s
 % ════════════════════════════════════════════════════════════════
 
 \paragraph{SA effectiveness.}
-On all 9 instances where the B\&C proves optimality, the incumbent at termination is the original SA warm-start solution---the B\&C confirms the SA solution is optimal but does not improve upon it.
-This suggests SA is highly effective for OP instances of this size ($n \leq 40$), consistent with the literature on metaheuristics for the OP \citep{vansteenwegen2011orienteering}.
+On all 9 instances where the B\&C proves optimality, the incumbent at termination is the original SA warm-start solution, confirming SA is highly effective for OP instances of this size ($n \leq 40$) \citep{vansteenwegen2011orienteering}.
 
 \paragraph{Cost asymmetry.}
 The 50\% asymmetry on La Muela demonstrates that symmetric OP formulations would be inadequate for mountainous terrain.
@@ -1146,30 +982,13 @@ The Minetti model captures this directionality naturally through the metabolic c
 
 \paragraph{Fatigue linearisation.}
 The comparison between the MTZ and flow formulations confirms that the McCormick envelope is the primary source of LP relaxation looseness in the MTZ approach.
-The flow formulation, combined with max-flow separation and reliability branching, reduces the mean benchmark gap from 13.2\% to 6.3\% and halves the maximum gap from 22.7\% to 15.2\%.
+The flow formulation, combined with max-flow separation and reliability branching, reduces the mean benchmark gap from 16.0\% to 5.4\% and proves 7 of 21 instances optimal.
 On real-terrain instances, the flow formulation reduces the La Muela Mixed-density gap from 14.6\% (MTZ) to 8.6\%, demonstrating the practical impact of this tighter relaxation.
 
 \paragraph{Computational complexity and runtime.}
-The overall framework has three computational bottlenecks, each with distinct scaling behaviour.
-
-\emph{Cost matrix construction.}
-For $n$ control points on a grid of $H \times W$ cells downsampled by factor $s$, the anisotropic Dijkstra runs $n$ times on a grid of $(H/s)(W/s)$ cells.
-Each Dijkstra has complexity $O\bigl(\frac{HW}{s^2} \log \frac{HW}{s^2}\bigr)$, giving a total cost matrix construction time of $O\bigl(\frac{nHW}{s^2} \log \frac{HW}{s^2}\bigr)$.
-In practice, with Numba JIT compilation and $s = 8$, the cost matrix for 41 nodes on a $1056 \times 1463$ grid computes in under 4 seconds.
-
-\emph{Simulated Annealing.}
-Each SA iteration evaluates a neighbourhood move in $O(k)$ time, where $k$ is the current route length.
-With $N_{\text{iter}}$ iterations and $N_{\text{restart}}$ restarts, the total SA time is $O(N_{\text{restart}} \cdot N_{\text{iter}} \cdot k)$.
-Since $k \leq n$ and both $N_{\text{iter}}$ and $N_{\text{restart}}$ are bounded by constants dependent on $n$, the SA runs in $O(n^2)$ per restart in the worst case.
-Empirically, SA completes in under 1 second for all tested instances ($n \leq 41$).
-
-\emph{Branch-and-Cut.}
-The B\&C has worst-case exponential complexity in $n$, as the number of branching nodes can grow as $O(2^n)$.
-The LP relaxation at each node has $O(n^2)$ variables and $O(n^2)$ constraints (before cuts), solvable in polynomial time by the simplex method.
-However, the number of subtour elimination cuts can be exponential in $|V|$.
-In our experiments, the B\&C runtime varies dramatically with instance structure:
-instances with fewer nodes or simpler topology (e.g., Clustered with 24 nodes: 14.1\,s) are solved orders of magnitude faster than dense instances (e.g., Standard with 31 nodes: 900\,s, hitting the time limit).
-This exponential sensitivity to instance structure is characteristic of branch-and-cut methods for routing problems and motivates the SA warm start, which provides a strong incumbent that enables aggressive pruning early in the search.
+Cost matrix construction runs $n$ anisotropic Dijkstra passes on a $(H/s)(W/s)$ grid, giving $O\bigl(nHW s^{-2} \log(HWs^{-2})\bigr)$; with Numba JIT and $s = 8$, this completes in under 4\,s for 41 nodes.
+SA runs in $O(N_{\text{restart}} \cdot N_{\text{iter}} \cdot n)$ and completes in under 1\,s for all tested instances.
+The B\&C has worst-case exponential complexity; in practice, runtime varies dramatically with instance structure (e.g., 14\,s for a 24-node clustered instance vs.\ 900\,s for a 31-node dense instance), motivating the SA warm start for aggressive early pruning.
 
 \paragraph{Limitations.}
 The framework has not been validated against GPS tracks from real orienteers.
@@ -1346,11 +1165,26 @@ G.~Kobeaga, M.~Merino, and J.~A. Lozano.
 \newblock A revisited branch-and-cut algorithm for large-scale orienteering problems.
 \newblock \emph{European Journal of Operational Research}, 290(3):865--880, 2021.
 
-\bibitem[Linderoth and Savelsbergh(1999)]{linderoth1999computational}
-J.~T. Linderoth and M.~W.~P. Savelsbergh.
-\newblock A computational study of search strategies for mixed integer programming.
-\newblock \emph{INFORMS Journal on Computing}, 11(2):173--187, 1999.
-
 \end{thebibliography}
+
+\section*{CRediT authorship contribution statement}
+
+\textbf{Pablo Borrego Ramos:} Conceptualization, Methodology, Software, Formal analysis, Investigation, Data curation, Writing -- original draft, Writing -- review \& editing, Visualization.
+
+\section*{Declaration of competing interest}
+
+The author declares that he has no known competing financial interests or personal relationships that could have appeared to influence the work reported in this paper.
+
+\section*{Funding}
+
+This research did not receive any specific grant from funding agencies in the public, commercial, or not-for-profit sectors.
+
+\section*{Data availability}
+
+The source code, benchmark instances, and supplementary data are publicly available at \url{https://github.com/PabloAlmendralejo/Orienteering-Problem}.
+
+\section*{Declaration of generative AI and AI-assisted technologies in the manuscript preparation process}
+
+During the preparation of this work the author used Kiro (Amazon Web Services) in order to assist with code development, literature search, and manuscript editing. After using this tool, the author reviewed and edited the content as needed and takes full responsibility for the content of the published article.
 
 \end{document}

@@ -25,6 +25,7 @@
 // ── Global ablation flags ──────────────────────────────────────────────────
 static bool g_use_tightened_coupling = true;
 static bool g_use_fatigue_covers = true;
+static bool g_use_lower_bound = true;  // f_ij >= C_0i * x_ij
 
 // ── JSON parser (improved from original) ───────────────────────────────────
 
@@ -195,7 +196,6 @@ struct LPModel {
         Highs_setBoolOptionValue(highs, "output_flag", false);
         Highs_setStringOptionValue(highs, "presolve", "on");
         Highs_setStringOptionValue(highs, "solver", "simplex");
-        Highs_setStringOptionValue(highs, "simplex_strategy", "1");
 
         x_col.assign(n, std::vector<int>(n, -1));
         y_col.resize(n, -1);
@@ -233,7 +233,7 @@ struct LPModel {
             }
 
         add_flow_conservation();
-        add_time_flow_coupling(inp.cm, inp.bud_raw);
+        add_time_flow_coupling(inp.cm, inp.bud_raw, inp.fatigue_rate);
         add_time_flow_propagation(inp.cm, inp.bud_raw);
         add_fatigue_budget_flow(inp.cm, inp.bud_raw, inp.fatigue_rate);
 
@@ -309,7 +309,7 @@ struct LPModel {
         }
     }
 
-    void add_time_flow_coupling(const std::vector<std::vector<double>>& cm, double bud_raw) {
+    void add_time_flow_coupling(const std::vector<std::vector<double>>& cm, double bud_raw, double fatigue_rate) {
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (f_col[i][j] < 0) continue;
@@ -328,8 +328,9 @@ struct LPModel {
                         {1.0,         -ub_coeff});
 
                 if (g_use_tightened_coupling) {
-                    // Lower bound: f[i][j] >= C_0i * x[i][j]
-                    if (i > 0 && std::isfinite(cm[0][i]) && cm[0][i] > 1e-9) {
+                    // Lower bound only when fatigue present
+                    if (g_use_lower_bound && fatigue_rate > 0 && i > 0
+                        && std::isfinite(cm[0][i]) && cm[0][i] > 1e-9) {
                         add_row(0.0, 1e30,
                                 {f_col[i][j], x_col[i][j]},
                                 {1.0,         -cm[0][i]});
@@ -1392,6 +1393,8 @@ std::vector<int> solve_sa_iterated(const Input& inp, int n_restarts = -1,
 struct BNCNode {
     std::vector<std::pair<int, double>> fixings;  // col -> value (0 or 1)
     double ub = 0.0;
+    // For priority queue: higher UB = higher priority (best-first)
+    bool operator<(const BNCNode& o) const { return ub < o.ub; }
 };
 
 struct Solver {
@@ -1431,8 +1434,8 @@ struct Solver {
         if (gr_pts > best_pts) { best_pts = gr_pts; best_route = std::move(gr); }
         std::cerr << "B&C warm start: " << best_pts << " pts\n";
 
-        // B&C search
-        std::stack<BNCNode> node_stack;
+        // B&C search — best-first (priority queue by UB)
+        std::priority_queue<BNCNode> node_pq;
         BNCNode root_node;
         std::cerr << "Solving root LP...\n";
         bool root_ok = root.solve();
@@ -1441,23 +1444,25 @@ struct Solver {
                   << "  obj=" << (root_ok ? root.obj() : -1.0) << "\n";
         root_node.ub = root_ok ? root.obj() : -std::numeric_limits<double>::infinity();
         std::cerr << "Root UB=" << root_node.ub << "  best_pts=" << best_pts << "\n";
-        if (root_node.ub > best_pts) node_stack.push(std::move(root_node));
+        if (root_node.ub > best_pts) node_pq.push(std::move(root_node));
 
         int nodes = 0;
         auto t_start = std::chrono::steady_clock::now();
-        while (!node_stack.empty() && nodes++ < 10000) {
+        while (!node_pq.empty() && nodes++ < 10000) {
             double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
             if (elapsed > time_limit_s) { std::cerr << "Time limit reached\n"; break; }
-            BNCNode node = std::move(node_stack.top());
-            node_stack.pop();
-            process_node(std::move(node), node_stack);
+            BNCNode node = std::move(const_cast<BNCNode&>(node_pq.top()));
+            node_pq.pop();
+            if (node.ub <= best_pts + 1e-6) continue;  // prune stale nodes
+            process_node(std::move(node), node_pq);
         }
-        proved_optimal = node_stack.empty() && nodes < 10000;
+        proved_optimal = node_pq.empty() && nodes < 10000;
         if (proved_optimal) {
             best_ub = best_pts;
         } else {
             best_ub = best_pts;
-            std::stack<BNCNode> tmp = node_stack;
+            // Scan remaining nodes for best UB
+            auto tmp = node_pq;
             while (!tmp.empty()) {
                 if (tmp.top().ub > best_ub) best_ub = tmp.top().ub;
                 tmp.pop();
@@ -1468,7 +1473,7 @@ struct Solver {
                   << " pts, UB: " << best_ub << ", gap: " << gap_pct << "%\n";
     }
 
-    void process_node(BNCNode node, std::stack<BNCNode>& node_stack) {
+    void process_node(BNCNode node, std::priority_queue<BNCNode>& node_pq) {
         if (node.ub <= best_pts + 1e-6 || node.fixings.size() > max_depth) return;
 
         // Clone LP and apply fixings
@@ -1486,9 +1491,11 @@ struct Solver {
             auto unreachable = find_depot_unreachable(lp);
             subtours.insert(subtours.end(), unreachable.begin(), unreachable.end());
 
-            // Max-flow separation: find violated connectivity cuts missed by rounding
-            auto mf_cuts = find_maxflow_cuts(lp);
-            subtours.insert(subtours.end(), mf_cuts.begin(), mf_cuts.end());
+            // Max-flow separation — only for no-fatigue instances (expensive, hurts fatigue instances)
+            if (inp.fatigue_rate < 1e-9) {
+                auto mf_cuts = find_maxflow_cuts(lp);
+                subtours.insert(subtours.end(), mf_cuts.begin(), mf_cuts.end());
+            }
 
             int cover_cuts = use_covers
                 ? find_and_add_cover_cuts(lp, inp) : 0;
@@ -1543,7 +1550,7 @@ struct Solver {
 
             // Reliability branching: use strong branching for first few decisions,
             // then fall back to pseudocost branching
-            if (node.fixings.size() < 8 && candidates.size() <= 20) {
+            if (node.fixings.size() < 6 && candidates.size() <= 15) {
                 // Strong branching: tentatively branch on each candidate, pick best
                 double best_score = -1.0;
                 for (const auto& [ni, col] : candidates) {
@@ -1586,8 +1593,8 @@ struct Solver {
                 node0.ub = lp_ub;
                 node1.fixings.emplace_back(branch_col, 1.0);
                 node1.ub = lp_ub;
-                node_stack.push(std::move(node0));
-                node_stack.push(std::move(node1));
+                node_pq.push(std::move(node0));
+                node_pq.push(std::move(node1));
             }
         }
     }
@@ -1656,6 +1663,8 @@ int main(int argc, char* argv[]) {
         else if (arg == "--coupling=on")    g_use_tightened_coupling = true;
         else if (arg == "--fatigue-covers=off") g_use_fatigue_covers = false;
         else if (arg == "--fatigue-covers=on")  g_use_fatigue_covers = true;
+        else if (arg == "--lower-bound=off") g_use_lower_bound = false;
+        else if (arg == "--lower-bound=on")  g_use_lower_bound = true;
         else if (arg == "--covers=off")     flag_covers = false;
         else if (arg == "--covers=on")      flag_covers = true;
         else if (arg == "--routing=off")    flag_routing = false;
@@ -1671,6 +1680,7 @@ int main(int argc, char* argv[]) {
 
     std::cerr << "Config: " << config_name
               << " coupling=" << (g_use_tightened_coupling ? "on" : "off")
+              << " lower-bound=" << (g_use_lower_bound ? "on" : "off")
               << " fatigue-covers=" << (g_use_fatigue_covers ? "on" : "off")
               << " covers=" << (flag_covers ? "on" : "off")
               << " routing=" << (flag_routing ? "on" : "off")
