@@ -927,19 +927,19 @@ A gap of 0.0\% with ``YES'' indicates that the B\&C has proven the SA solution t
 \cmidrule(lr){3-4} \cmidrule(lr){5-6} \cmidrule(lr){7-8}
 \textbf{Distribution} & ctrls & pts & visited & gap & optimal? & gap & optimal? \\
 \midrule
-Standard        & 40 &  940 & 25 & 14.1\% & no  &  7.0\% & no \\
-Clustered       & 35 &  510 & 29 &  0.0\% & \textbf{YES} &  4.8\% & no \\
+Standard        & 40 &  940 & 25 & 14.1\% & no  & 12.2\% & no \\
+Clustered       & 35 &  510 & 29 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
 Ring            & 30 &  650 & 26 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Path-biased     & 35 &  630 & 30 &  4.5\% & no  &  0.0\% & \textbf{YES} \\
-Elev-biased     & 35 &  380 & 29 &  7.9\% & no  &  4.5\% & no \\
+Path-biased     & 35 &  630 & 30 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
+Elev-biased     & 35 &  380 & 29 &  7.4\% & no  &  6.3\% & no \\
 Sparse-far      & 25 &  660 & 19 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Mixed-density   & 40 &  680 & 32 &  8.6\% & no  &  3.9\% & no \\
+Mixed-density   & 40 &  680 & 32 &  8.6\% & no  &  7.1\% & no \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The flow formulation proves 3 of 7 instances optimal versus 3 for MTZ, though on different distributions: MTZ proves Clustered while Flow proves Path-biased.
-The flow formulation produces substantially tighter gaps on the unproven instances, with the largest improvement on Standard (14.1\% $\to$ 7.0\%) and Mixed-density (8.6\% $\to$ 3.9\%).
+The flow formulation proves 4 of 7 instances optimal, matching MTZ (4/7) on the same subset (Clustered, Ring, Path-biased, Sparse-far).
+The flow formulation produces tighter gaps on the unproven instances, with improvements on Standard (14.1\% $\to$ 12.2\%), Elev-biased (7.4\% $\to$ 6.3\%), and Mixed-density (8.6\% $\to$ 7.1\%).
 
 \subsection{La Muela Results}
 
@@ -953,22 +953,22 @@ The flow formulation produces substantially tighter gaps on the unproven instanc
 \cmidrule(lr){3-4} \cmidrule(lr){5-6} \cmidrule(lr){7-8}
 \textbf{Distribution} & ctrls & pts & visited & gap & optimal? & gap & optimal? \\
 \midrule
-Standard        & 31 &  610 & 14 & 16.7\% & no  &  0.0\% & \textbf{YES} \\
+Standard        & 31 &  610 & 14 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
 Clustered       & 35 &  800 & 24 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Ring            & 30 &  470 & 21 & 11.7\% & no  &  3.1\% & no \\
-Path-biased     & 35 &  570 & 17 &  0.0\% & \textbf{YES} &  4.8\% & no \\
-Elev-biased     & 35 &  730 & 22 & 17.0\% & no  &  4.0\% & no \\
+Ring            & 30 &  470 & 21 &  6.3\% & no  &  0.0\% & \textbf{YES} \\
+Path-biased     & 35 &  570 & 17 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
+Elev-biased     & 35 &  730 & 22 & 17.0\% & no  & 12.4\% & no \\
 Sparse-far      & 25 &  600 & 13 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Mixed-density   & 40 &  680 & 25 & 19.1\% & no  &  6.2\% & no \\
+Mixed-density   & 40 &  680 & 25 & 14.6\% & no  &  8.6\% & no \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-On La Muela, the flow formulation proves 3 of 7 instances optimal versus 3 for MTZ, again on different distributions: MTZ proves Path-biased while Flow proves Standard.
-The flow formulation reduces gaps dramatically on the hardest instances: Standard (16.7\% $\to$ 0.0\%, newly proven optimal), Elev-biased (17.0\% $\to$ 4.0\%), and Mixed-density (19.1\% $\to$ 6.2\%).
+On La Muela, the flow formulation proves 5 of 7 instances optimal versus 4 for MTZ, with the flow formulation additionally proving Ring optimal.
+The flow formulation reduces gaps on the unproven instances: Elev-biased (17.0\% $\to$ 12.4\%) and Mixed-density (14.6\% $\to$ 8.6\%).
 Despite the significantly harder terrain (464\,m relief, 50\% cost asymmetry), the flow-based B\&C closes the optimality gap substantially on all instances.
 
-Across both terrains (14 instances total), the flow formulation proves 6 of 14 instances optimal (vs.\ 6 for MTZ, though on different subsets) and reduces the mean gap on unproven instances from 12.0\% to 4.6\%.
+Across both terrains (14 instances total), the flow formulation proves 9 of 14 instances optimal (vs.\ 8 for MTZ) and reduces the mean gap on unproven instances from 12.3\% to 9.3\%.
 
 \subsection{Synthetic Benchmark Instances}
 \label{sec:benchmark}
@@ -1145,7 +1145,7 @@ The Minetti model captures this directionality naturally through the metabolic c
 
 \paragraph{Fatigue linearisation.}
 The comparison between the MTZ and flow formulations confirms that the McCormick envelope is the primary source of LP relaxation looseness in the MTZ approach.
-The flow formulation, combined with max-flow separation and reliability branching, reduces the mean benchmark gap from 13.2\% to 6.3\% and halves the maximum gap from 22.7\% to 15.2\%.
+The flow formulation, combined with max-flow separation and reliability branching, reduces the mean benchmark gap from 16.0\% to 5.4\% and proves 7 of 21 benchmark instances optimal.
 On real-terrain instances, the flow formulation reduces the La Muela Mixed-density gap from 14.6\% (MTZ) to 8.6\%, demonstrating the practical impact of this tighter relaxation.
 
 \paragraph{Computational complexity and runtime.}
