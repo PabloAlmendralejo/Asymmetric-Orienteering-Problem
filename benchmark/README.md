@@ -14,21 +14,21 @@ This creates 21 instances varying:
 - Node count: 20, 30, 40, 50, 75, 100
 - Asymmetry: 0%, 10%, 25%, 50%
 - Fatigue rate: 0.0, 0.1, 0.2, 0.3
-- Budget tightness: loose (~70%), medium (~50%), tight (~30%) of nearest-neighbour tour cost
+- Budget tightness: the budget B is set to 70% (loose), 50% (medium), or 30% (tight) of the nearest-neighbour tour cost
 - Plus 4 extreme cases (symmetric easy, asymmetric hard, high asymmetry no fatigue, symmetric high fatigue)
 
 ## Solvers
 
 Four solver variants are provided:
 
-| Solver | File | Description |
+| Solver | File | Formulation |
 |---|---|---|
-| MTZ B&C | `benchmark_solver.cpp` | MTZ time propagation + McCormick linearisation of fatigue |
-| Flow B&C | `benchmark_solver_flow.cpp` | Single-commodity flow variables + tightened coupling + fatigue-aware covers + routing infeasibility cuts (B2) |
-| Flow B&C v2 | `benchmark_solver_flow_v2.cpp` | Flow B&C + cycle cover cuts (B3) + path inequality cuts (B4) |
-| Ablation | `benchmark_solver_ablation.cpp` | Flow B&C with command-line flags to toggle each cut family on/off |
+| MTZ B&C | `benchmark_solver.cpp` | MTZ time propagation + McCormick linearisation |
+| Flow B&C | `benchmark_solver_flow.cpp` | Single-commodity flow + tightened coupling + all cuts (B1-B4) |
+| Ablation | `benchmark_solver_ablation.cpp` | Flow B&C with command-line flags to toggle each cut family |
+| Heuristics | `compare_heuristics.cpp` | Greedy / GA / ACO / SA comparison |
 
-All solvers share the same SA warm-start (seed 42, deterministic) for fair comparison.
+All B&C solvers share the same SA warm-start (deterministic, seed 42) and use best-first search for benchmark instances.
 
 ### Compile and run
 
@@ -60,36 +60,42 @@ The ablation solver supports the following flags (all default to `on`):
 | `--config=<name>` | Label for CSV output |
 | `--csv=<file>` | Append results to CSV file |
 
-Run the full ablation study with:
-```bash
-run_ablation.bat
-```
-This runs 5 cumulative configurations across all 21 instances and writes results to `ablation_results.csv`.
+### Key results (21 instances, 900s time limit)
 
-## Heuristic comparison
+**Formulation comparison (MTZ vs Flow):**
 
-A separate heuristic comparison evaluates four methods under equal 2-second time budgets
-across all 21 instances (10 seeds per stochastic method):
+| Metric | MTZ | Flow |
+|---|---|---|
+| Mean gap | 16.0% | 5.4% |
+| Instances optimal | 4/21 | 7/21 |
+| Max gap | 42.0% | 10.5% |
 
-```bash
-cl.exe /O2 /std:c++20 /EHsc compare_heuristics.cpp /I<highs_include> /link highs.lib /out:compare_heuristics.exe
-compare_heuristics.exe instances
-```
+**Ablation study (flow formulation, cumulative):**
 
-| Method | Mean gap below SA | Std | Min gap | Max gap |
-|---|---|---|---|---|
-| Greedy | 23.0% | 9.4% | 3.7% | 40.0% |
-| GA | 49.2% | 11.0% | 24.6% | 71.9% |
-| ACO | 8.1% | 4.9% | 1.3% | 24.1% |
-| SA | — | — | — | — |
+| Config | Cuts enabled | Mean gap | Opt. |
+|---|---|---|---|
+| 1 | Base (SECs + conn. + tight. + fat.) | 5.54% | 6/21 |
+| 2 | + B1 (lifted covers) | 5.85% | 7/21 |
+| 3 | + B2 (routing infeas.) | 5.41% | 7/21 |
+| 4 | + B3 (cycle covers) | 5.35% | 7/21 |
+| 5 | + B4 (path ineq.) | 5.42% | 7/21 |
 
-SA significantly outperforms all alternatives (Wilcoxon signed-rank, all p < 0.001).
+**Heuristic comparison (equal 2s budgets, 10 seeds):**
+
+| Method | Mean gap below SA |
+|---|---|
+| Greedy | 23.0% |
+| GA | 49.2% |
+| ACO | 8.1% |
+| SA | (reference) |
+
+All differences significant (Wilcoxon signed-rank, p < 0.001).
 
 ## Output
 
 Each instance produces:
 - `op_output_*.json` with SA and B&C results (route, points, timing, optimality status, gap)
-- Summary table printed to stdout with points, nodes, time, optimality status, and LP gap
+- Summary table printed to stdout
 
 ## Instance format
 

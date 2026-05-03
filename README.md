@@ -42,7 +42,9 @@ The pipeline has two stages:
 │   └── op_bnc_with_highs_torremocha.cpp  # B&C solver (Torremocha)
 ├── benchmark/
 │   ├── generate_instances.py        # Parameterized instance generator
-│   ├── benchmark_solver.cpp         # Standalone B&C solver for benchmarks
+│   ├── benchmark_solver.cpp         # MTZ B&C solver for benchmarks
+│   ├── benchmark_solver_flow.cpp    # Flow B&C solver for benchmarks
+│   ├── benchmark_solver_ablation.cpp # Ablation study solver
 │   ├── compare_heuristics.cpp       # Greedy / GA / ACO / SA comparison
 │   └── README.md
 ├── paper/
@@ -107,71 +109,57 @@ hillshade, directional asymmetry heatmap, and route overlay with A* traced paths
 | | Torremocha | La Muela |
 |---|---|---|
 | Location | Cáceres, Spain | Salamanca, Spain |
-| CRS | EPSG:25829 | EPSG:25830 |
-| Grid | 1056 × 1463 | 1376 × 1622 |
+| Area | 2.1 × 2.9 km | 2.8 × 3.2 km |
 | Resolution | 2.0 m | 2.0 m |
-| Elevation | 447–501 m | 1164–1628 m |
 | Relief | 55 m | 464 m |
 | Cost asymmetry | 16.1% | 50.0% |
-| HCR scaling (c) | 0.87 | 2.18 |
-| Proven optimal | 4/7 instances (flow) | 5/7 instances (flow) |
+| IQR scaling (c) | 0.87 | 2.18 |
+| Proven optimal (flow) | 4/7 instances | 5/7 instances |
 
 ## Key Results
 
-### Real terrain instances (flow formulation)
+### Real terrain instances
 Across 14 instances (7 per terrain), the flow-based B&C proves optimality on
-9 of 14 instances. LP gaps on unproven instances range from 6.3% to 12.4%.
+9 of 14 instances (vs. 8 for MTZ) within a 15-minute time limit.
 
-### Formulation comparison
-Two B&C formulations are compared: MTZ with McCormick linearisation, and a
-single-commodity flow model with natively linear fatigue budget. On 21 benchmark
-instances, the flow formulation reduces the mean LP gap from 13.2% to 9.7% and
-proves 6 vs 5 instances optimal.
+### Formulation comparison (21 benchmark instances)
+The flow formulation reduces the mean LP gap from 16.0% to 5.4% compared to
+the MTZ formulation, and proves 7 instances optimal versus 4 for MTZ.
 
 ### Heuristic comparison
-Under equal 2-second time budgets, SA significantly outperforms Greedy (23% gap),
-GA (49% gap), and ACO (8.1% gap) across 21 benchmark instances
+Under equal 2-second time budgets, SA significantly outperforms Greedy (23.0% gap),
+GA (49.2% gap), and ACO (8.1% gap) across 21 benchmark instances
 (Wilcoxon signed-rank, all p < 0.001).
-
-### Benchmark scaling
-The B&C proves optimality for n ≤ 30 within 15 minutes. At n ≥ 40, gaps range
-from 10–29% (flow) depending on asymmetry and fatigue rate.
 
 ## Benchmark Suite
 
 Parameterized instances for the asymmetric OP with fatigue — the first
-benchmark set for this problem variant.
-
-```bash
-cd benchmark
-python generate_instances.py --output-dir instances
-
-# Compile and run B&C solver:
-benchmark_solver.exe instances
-
-# Heuristic comparison (no HiGHS needed):
-compare_heuristics.exe instances
-```
+benchmark set for this problem variant. See `benchmark/README.md` for details.
 
 Instances vary across:
 - Node count: 20, 30, 40, 50, 75, 100
 - Asymmetry: 0% to 50%
 - Fatigue rate: 0.0 to 0.3
-- Budget tightness: loose, medium, tight
+- Budget tightness: loose (70%), medium (50%), tight (30%) of NN tour cost
 
 ## B&C Solver Features
 
 Two LP formulations:
 - **MTZ formulation**: MTZ time propagation with tightened big-M constants, McCormick linearisation of bilinear fatigue term
-- **Flow formulation**: single-commodity flow variables, natively linear fatigue budget (no McCormick)
+- **Flow formulation**: single-commodity flow variables, natively linear fatigue budget (no McCormick), tightened flow-arc coupling bounds
 
-Shared features:
+Valid inequalities (both formulations):
 - Directed subtour elimination (Kosaraju SCC)
-- Depot-unreachable detection (reverse BFS)
-- Lifted cover cuts on fatigue budget knapsack
+- Connectivity cuts (reverse BFS + Dinic max-flow)
+- Lifted cover cuts with fatigue-aware arc weights (B1)
+- Routing infeasibility cuts based on assignment relaxation (B2)
+- Directed cycle cover cuts (B3)
+- Directed path inequality cuts (B4)
+
+Other features:
 - Fatigue-aware arc elimination
-- LP gap tracking and explored/unexplored node counts
-- Deterministic SA with multi-restart warm starts
+- SA warm-start with auto-calibrated iterations/restarts
+- DFS node selection for terrain instances, BFS for benchmarks
 
 ## Data
 
@@ -184,4 +172,4 @@ See `paper/orienteering_paper.tex` for the full methodology and results.
 
 ## Author
 
-Pablo Borrego Ramos — pabloalmendralejo@gmail.com
+Pablo Borrego Ramos — paborrego@alumnos.unex.es
