@@ -362,20 +362,20 @@ This is why the distance term in \cref{eq:psi} is defined using raw path length 
 % ════════════════════════════════════════════════════════════════
 
 We formulate the Asymmetric Orienteering Problem with Fatigue (AOPF) as a mixed-integer linear program.
-The core challenge is the bilinear fatigue term $t_i \cdot x_{ij}$ in the budget constraint, where $t_i$ is the arrival time at node $i$.
+The core challenge is the bilinear fatigue term $G_i \cdot x_{ij}$ in the budget constraint, where $G_i$ is the (unclipped) fatigue state at node $i$ (\cref{sec:fatigue}).
 We present two formulations that handle this term differently: an MTZ-based formulation that linearises it via McCormick envelopes, and a flow-based formulation where the fatigue budget is natively linear.
-Both share the same objective, arc/node variables, and subtour elimination cuts; they differ only in the time-tracking variables and the fatigue budget constraint.
+Both share the same objective, arc/node variables, and subtour elimination cuts; they differ only in the state-tracking variables and the fatigue budget constraint.
 
 \subsection{Sets and Parameters}
 
 Let $V = \{0, 1, \ldots, n\}$ be the set of nodes, where node~0 is the depot.
-The parameters $C_{ij}$, $B$, and $\lambda$ are as defined in \cref{sec:cost}.
+The parameters $C_{ij}$, $\psi_{ij}$, $B$, $\lambda$, $\rho$, and $\mu$ are as defined in \cref{sec:cost,sec:fatigue}.
 Each node $i$ has a score $p_i \geq 0$ (with $p_0 = 0$).
 
 \subsection{Decision Variables}
 
 Both formulations share arc variables $x_{ij} \in \{0,1\}$ and node-visit variables $y_i \in \{0,1\}$.
-They differ in how arrival times and the fatigue budget are modelled.
+They differ in how the fatigue state and budget are modelled.
 
 \subsection{Objective}
 
@@ -404,90 +404,91 @@ An arc $(i,j)$ is eliminated if the base cost alone exceeds the budget:
   x_{ij} = 0 \quad \text{if } C_{ij} + C_{j0} > B \;\text{ or }\; C_{0i} + C_{ij} + C_{j0} > B
   \label{eq:arcelim}
 \end{equation}
-The base-cost test~\eqref{eq:arcelim} is applied first as a computationally inexpensive pre-filter (no multiplications); arcs that survive are then tested with the fatigue-aware criterion.
-Even on the shortest possible path using arc $(i,j)$---the direct route $0 \to i \to j \to 0$---the fatigue-adjusted cost must not exceed the budget:
+The original (linear) model additionally applied a fatigue-aware pre-filter, testing whether the direct route $0 \to i \to j \to 0$ remained budget-feasible once fatigue was accounted for.
+Under the revised model (\cref{sec:fatigue}) this test is not available as a cheap a~priori filter: evaluating it requires an upper bound $\hat{G}_i$ on the fatigue state reachable at $i$, but $\hat{G}_i$ is itself only well-defined once the surviving-arc graph is fixed (\cref{eq:ghat} below)---testing arc $(i,j)$ against a bound that depends on which arcs survive, including $(i,j)$ itself, is circular.
+We therefore retain only the base-cost filter~\eqref{eq:arcelim}; it is a conservative superset of the true survivors (some arcs it keeps may still be fatigue-infeasible), which is exactly what \cref{eq:ghat} needs to remain a valid bound.
+
+\paragraph{Fatigue-state bounds $\hat{G}_i$ and $\check{G}_i$.}
+Both formulations below need a valid upper bound $\hat{G}_i$ on the (unclipped) fatigue state reachable at $i$, to size big-$M$ constants and McCormick/coupling bounds---the role $B - C_{0i} - C_{j0}$ played for arrival times in the original model.
+Unlike elapsed cost, $\psi_{ij}$ can be negative, so the surviving-arc graph (\cref{eq:arcelim}) weighted by $\psi$ can contain positive-weight cycles, making the longest-walk problem that would naturally define $\hat{G}_i$ NP-hard in general.
+We instead compute $\hat{G}_i$ by a Bellman--Ford relaxation in the $(\max, +)$ semiring, capped at $n-1$ rounds:
 \begin{equation}
-  x_{ij} = 0 \quad \text{if } C_{0i} + C_{ij}\!\left(1 + \frac{\lambda\, C_{0i}}{B}\right) + C_{j0}\!\left(1 + \frac{\lambda\,(C_{0i} + C_{ij})}{B}\right) > B
-  \label{eq:arcelim_fatigue}
+  \hat{G}_i = \max\Bigl(0,\ \max_{\substack{\text{walks } 0 \to i \\ \text{of length} \leq n-1}} \sum_{\text{legs}} \psi\Bigr)
+  \label{eq:ghat}
 \end{equation}
+Any \emph{simple} path through the $n+1$ nodes has at most $n-1$ arcs, so capping the relaxation at $n-1$ rounds is a superset of all simple-path sums---the bound remains valid regardless of cycle sign, and the relaxation is well-defined (no divergence) despite positive cycles, since we simply stop before they can be exploited.
+An analogous $\check{G}_i$, a valid \emph{lower} bound needed only by Formulation~B (below), is computed the same way with a $(\min,+)$ relaxation.
+Both run in $O(n^3)$ (\,$O(n^2)$ arcs $\times$ $O(n)$ rounds), trivial for the instance sizes here.
+$\hat{G}_i$ and $\check{G}_i$ are constructed to be valid bounds for the LP relaxation's own state variables (defined below); the route an accepted solution actually reports is always re-checked directly against the exact clipped model~\eqref{eq:fatigue_clip} before being output; see \cref{sec:discussion} for further remarks on the relationship between the two.
 
 \subsection{Formulation A: MTZ with McCormick Linearisation}
 \label{sec:formulation_mtz}
 
-This formulation introduces arrival-time variables $t_i \in [0, B]$ at each node and auxiliary variables $w_{ij} \geq 0$ to linearise the bilinear fatigue term $t_i \cdot x_{ij}$.
+This formulation introduces fatigue-state variables $G_i \in [0, \hat{G}_i]$ at each node and auxiliary variables $u_{ij} \geq 0$ to linearise the bilinear fatigue term $G_i \cdot x_{ij}$.
 
-\paragraph{Time propagation (MTZ-type).}
+\paragraph{State propagation (MTZ-type).}
 For each arc $(i,j)$ with $j \neq 0$:
 \begin{equation}
-  t_j \geq t_i + C_{ij} - M_{ij}(1 - x_{ij})
+  G_j \geq G_i + \psi_{ij} - M_{ij}(1 - x_{ij})
   \label{eq:mtz}
 \end{equation}
-where the big-$M$ constant is tightened to:
+where the big-$M$ constant is:
 \begin{equation}
-  M_{ij} = \max\bigl(B - C_{0i} - C_{j0},\; C_{ij}\bigr)
+  M_{ij} = \hat{G}_i + \max(\psi_{ij},\, 0)
   \label{eq:bigM}
 \end{equation}
-The value $B - C_{0i} - C_{j0}$ is the maximum time that could have elapsed at node $i$ on any feasible route that still uses arc $(i,j)$ and returns to the depot.
-This is tighter than the standard MTZ constant $M = n$ and reduces the LP relaxation gap.
+so that the constraint is vacuous when $x_{ij}=0$ (the largest $G_i$ can be is $\hat{G}_i$, and the largest $\psi_{ij}$ can contribute is $\max(\psi_{ij},0)$).
+Because $G_i$ additionally has a hard column floor of $0$ and~\eqref{eq:mtz} is a one-sided inequality (not an equality), the LP is free to set $G_j$ to the tightest value satisfying every incoming constraint---which, combined with the budget constraint's pressure to keep $G$ small, reproduces the $\max(0, \cdot)$ clip of~\eqref{eq:fatigue_clip} along the path actually selected by $x$, without needing to encode the clip explicitly.
 
 \paragraph{McCormick linearisation.}
-The fatigue budget involves the bilinear term $t_i \cdot x_{ij}$.
-We introduce $w_{ij} \approx t_i \cdot x_{ij}$ with McCormick envelope constraints.
-Let $\bar{w}_{ij} = \min(B - C_{ij} - C_{j0},\; B - C_{i0})$ be the tightest upper bound on $w_{ij}$:
+The fatigue budget involves the bilinear term $G_i \cdot x_{ij}$.
+We introduce $u_{ij} \approx G_i \cdot x_{ij}$ with the standard McCormick envelope, using $\hat{G}_i$ as the bound:
 \begin{align}
-  w_{ij} &\geq t_i - \bar{w}_{ij}(1 - x_{ij}) \label{eq:mc1} \\
-  w_{ij} &\leq \bar{w}_{ij} \, x_{ij} \label{eq:mc2} \\
-  w_{ij} &\leq t_i \label{eq:mc3}
+  u_{ij} &\geq G_i - \hat{G}_i(1 - x_{ij}) \label{eq:mc1} \\
+  u_{ij} &\leq \hat{G}_i \, x_{ij} \label{eq:mc2} \\
+  u_{ij} &\leq G_i \label{eq:mc3}
 \end{align}
-Constraint~\eqref{eq:mc1} forces $w_{ij} = t_i$ when $x_{ij} = 1$; constraint~\eqref{eq:mc2} forces $w_{ij} = 0$ when $x_{ij} = 0$; and constraint~\eqref{eq:mc3} ensures $w_{ij} \leq t_i$.
+Constraint~\eqref{eq:mc1} forces $u_{ij} = G_i$ when $x_{ij} = 1$; constraint~\eqref{eq:mc2} forces $u_{ij} = 0$ when $x_{ij} = 0$; and constraint~\eqref{eq:mc3} ensures $u_{ij} \leq G_i$.
 
 \paragraph{Fatigue budget (MTZ).}
+Unlike the original model, there is no $B$ to normalise by: $G_i$ is expressed in metres, not as an elapsed-budget fraction.
 \begin{equation}
-  \sum_{(i,j) \in A} C_{ij} \, x_{ij} + \frac{\lambda}{B} \sum_{(i,j) \in A} C_{ij} \, w_{ij} \leq B
+  \sum_{(i,j) \in A} C_{ij} \, x_{ij} + \lambda \sum_{(i,j) \in A} C_{ij} \, u_{ij} \leq B
   \label{eq:fatigue_budget}
 \end{equation}
-The McCormick envelope is an outer approximation of the true bilinear set, introducing LP relaxation looseness that grows with the fatigue rate $\lambda$.
+The McCormick envelope is an outer approximation of the true bilinear set, introducing LP relaxation looseness that grows with the fatigue rate $\lambda$, as before.
 
 \subsection{Formulation B: Single-Commodity Flow}
 \label{sec:formulation_flow}
 
-This formulation replaces the MTZ time variables and McCormick auxiliary variables with flow variables $f_{ij} \geq 0$.
-We define $f_{ij}$ so that, by construction of the constraints below, $f_{ij} = t_i \cdot x_{ij}$ at any integer-feasible solution.
-At fractional LP solutions, the flow constraints enforce a tighter relaxation of this product than the McCormick envelope, eliminating the relaxation looseness introduced by Formulation~A and making the fatigue budget a natively linear constraint.
+This formulation replaces the MTZ state variables and McCormick auxiliary variables with flow variables $g_{ij}$.
+We define $g_{ij}$ so that, by construction of the constraints below, $g_{ij} = G_i \cdot x_{ij}$ at any integer-feasible solution.
 
 \paragraph{Flow-arc coupling.}
-Flow is only permitted on active arcs:
+Unlike the original model, where elapsed cost is always non-negative, $\psi_{ij}$ can be negative (net downhill recovery), so $g_{ij}$ needs \emph{both} an upper and a lower coupling bound:
 \begin{equation}
-  f_{ij} \leq B \cdot x_{ij} \qquad \forall\, (i,j) \in A
+  \check{G}_i \cdot x_{ij} \leq g_{ij} \leq \hat{G}_i \cdot x_{ij} \qquad \forall\, (i,j) \in A
   \label{eq:flow_coupling}
 \end{equation}
-This basic coupling can be tightened by exploiting the structure of feasible routes.
-If arc $(i,j)$ is used, the cumulative base cost at node $i$ is at least $C_{0i}$ (the direct cost from the depot) and at most $B - C_{ij} - C_{j0}$ (the maximum that still allows traversing $(i,j)$ and returning to the depot within budget).
-Since $f_{ij} = t_i \cdot x_{ij}$, where $t_i$ denotes the cumulative base cost at node $i$, these bounds yield:
-\begin{equation}
-  C_{0i} \cdot x_{ij} \leq f_{ij} \leq (B - C_{ij} - C_{j0}) \cdot x_{ij} \qquad \forall\, (i,j) \in A,\; i \neq 0
-  \label{eq:flow_coupling_tight}
-\end{equation}
-The tightened coupling~\eqref{eq:flow_coupling_tight} reduces the LP relaxation's freedom to assign unrealistic flow values to fractional arcs, producing a tighter upper bound without affecting integer-feasible solutions.
+A single-sided bound $g_{ij} \leq \hat{G}_i x_{ij}$ (mirroring the original model's~\eqref{eq:flow_coupling}) would be unsound here: combined with the conservation equality below, it can force $g_{ij}$ to be \emph{inflated} on arcs upstream of a strongly-recovering leg, simply to keep the (non-negative-only) flow variable feasible against a negative increment further down the path---an artifact of the equality system, not a reflection of the true state.
+The two-sided bound~\eqref{eq:flow_coupling} gives $g_{ij}$ room to actually hold a negative increment.
 
-\paragraph{Time flow conservation.}
-At each non-depot node $j$, the incoming time (flow plus arc traversal cost) equals the outgoing flow:
+\paragraph{Fatigue flow conservation.}
+At each non-depot node $j$:
 \begin{equation}
-  \sum_{i \in V} \bigl(f_{ij} + C_{ij} \, x_{ij}\bigr) = \sum_{k \in V} f_{jk} \qquad \forall\, j \in V \setminus \{0\}
+  \sum_{i \in V} \bigl(g_{ij} + \psi_{ij} \, x_{ij}\bigr) = \sum_{k \in V} g_{jk} \qquad \forall\, j \in V \setminus \{0\}
   \label{eq:flow_conservation}
 \end{equation}
-Depot outgoing flow is fixed to zero: $f_{0j} = 0$ for all $j$.
-Together with the coupling constraint~\eqref{eq:flow_coupling}, this ensures that $f_{ij}$ carries the cumulative base cost at node $i$ whenever arc $(i,j)$ is active, and is zero otherwise.
-At integer feasibility, $f_{ij} = t_i \cdot x_{ij}$ holds exactly; at fractional LP solutions, the flow structure provides a tighter relaxation of this product than the McCormick envelope.
+Depot outgoing flow is fixed to zero: $g_{0j} = 0$ for all $j$.
+This has the same structure as the original model's time-flow conservation, but the coupling bounds~\eqref{eq:flow_coupling} being two-sided (rather than $g_{ij} \geq 0$) is what makes it well-posed for a $\psi$ that changes sign.
 The flow structure eliminates subtours for integer solutions; the explicit SECs and connectivity cuts (\cref{eq:sec,eq:outcut,eq:incut}) remain necessary to cut off fractional subtours in the LP relaxation.
 
 \paragraph{Fatigue budget (flow).}
-Because $f_{ij} = t_i \cdot x_{ij}$ by construction, the fatigue budget is natively linear:
 \begin{equation}
-  \sum_{(i,j) \in A} C_{ij} \, x_{ij} + \frac{\lambda}{B} \sum_{(i,j) \in A} C_{ij} \, f_{ij} \leq B
+  \sum_{(i,j) \in A} C_{ij} \, x_{ij} + \lambda \sum_{(i,j) \in A} C_{ij} \, g_{ij} \leq B
   \label{eq:fatigue_budget_flow}
 \end{equation}
-The flow formulation has $O(n^2)$ additional continuous variables (one $f_{ij}$ per arc) compared to $O(n)$ time variables in the MTZ formulation, but produces a tighter LP relaxation by eliminating the McCormick approximation gap.
+As in the original model, the flow formulation has $O(n^2)$ additional continuous variables (one $g_{ij}$ per arc) compared to $O(n)$ state variables in the MTZ formulation, but produces a tighter LP relaxation than the McCormick envelope.
 
 \subsection{Subtour Elimination and Connectivity Cuts}
 
@@ -522,7 +523,7 @@ We present four families of budget-based cuts, numbered (B1)--(B4).
 The separation routines used to identify violated instances of each cut are described in \cref{sec:separation}.
 
 \paragraph{(B1) Lifted cover cuts.}
-The fatigue budget constraint $\sum_{(i,j) \in A} C_{ij}\, x_{ij} + \tfrac{\lambda}{B} \sum_{(i,j) \in A} C_{ij}\, f_{ij} \leq B$ limits the total cost of arcs used in the solution.
+The fatigue budget constraint (\cref{eq:fatigue_budget,eq:fatigue_budget_flow}) limits the total cost of arcs used in the solution.
 Consider a subset of arcs $\mathcal{C} \subseteq A$ whose combined base costs exceed the budget: $\sum_{(i,j) \in \mathcal{C}} C_{ij} > B$.
 A feasible solution may use some arcs from $\mathcal{C}$, but it cannot use all of them simultaneously---doing so would exceed the budget even before accounting for fatigue.
 Such a set $\mathcal{C}$ is called a \emph{cover}, and the corresponding \emph{cover inequality} states:
@@ -560,6 +561,10 @@ But $D^f(\sigma) \leq B$ (budget feasibility), contradicting $C_{\text{assign}}(
 Unlike cover cuts (B1), which the LP can satisfy by reducing fractional arc values, routing infeasibility cuts constrain the $y_i$ variables directly.
 The LP cannot circumvent them by redistributing arc flow, since the inequality involves no arc variables.
 
+\paragraph{Remark.}
+Propositions~\ref{prop:routing} and~\ref{prop:cyclecover} (below) are stated purely in terms of $D^f(\sigma)$ and hold for \emph{any} route-cost function satisfying $D^f(\sigma) \geq \sum_{(i,j) \in \sigma} C_{ij}$ (fatigue never reduces cost)---true both of the original model and of the revised one (\cref{sec:fatigue}), since $C^f_{ij}(F_i) = C_{ij}(1 + \lambda F_i) \geq C_{ij}$ as $F_i \geq 0$ always.
+Their proofs therefore carry over unchanged; only the definition of $D^f$ itself has changed.
+
 \paragraph{(B3) Directed cycle cover cuts.}
 We adapt the cycle cover inequalities of \citet{fischetti1998solving} from the undirected OP to our directed formulation.
 Let $F \subset A$ be a set of directed arcs forming a directed cycle through nodes $V(F)$ whose base cost $\sum_{(i,j) \in F} C_{ij}$ exceeds $B$.
@@ -588,12 +593,14 @@ Cover cuts (B1) remain useful because their separation is computationally cheape
 We adapt the path inequalities of \citet{fischetti1998solving} to the directed asymmetric OP with fatigue.
 Let $P = (v_1 \to v_2 \to \cdots \to v_k)$ be a directed path through $k$ non-depot nodes, where each $v_\ell \in V \setminus \{0\}$ is a node and the arcs $(v_\ell, v_{\ell+1})$ for $\ell = 1, \ldots, k-1$ are traversed in sequence.
 Let $V(P) = \{v_1, \ldots, v_k\}$ denote the node set of $P$.
+Propagate the exact (clipped) fatigue state deterministically along $P$ using the base matrices: $\phi_1 = \max(0, \psi_{0,v_1})$ and $\phi_\ell = \max(0,\, \phi_{\ell-1} + \psi_{v_{\ell-1}, v_\ell})$ for $\ell = 2, \ldots, k$, matching~\eqref{eq:fatigue_clip} exactly since $P$ is a single fixed sequence with no branching.
+Let $\Phi(P) = C_{0,v_1} \cdot (1 + \lambda \cdot 0) + \sum_{\ell=1}^{k-1} C_{v_\ell, v_{\ell+1}}^f(\phi_\ell)$ be the fatigue-adjusted cost of traversing $P$ from the depot (the state is $0$ on departure, so the first leg is unpenalised).
 Define the \emph{feasible closing set}:
 \begin{equation}
-  W(P) = \left\{ v \in V \setminus V(P) : C_{0,v_1}^f + \sum_{\ell=1}^{k-1} C_{v_\ell, v_{\ell+1}}^f + C_{v_k, v}^f + C_{v, 0}^f \leq B \right\}
+  W(P) = \left\{ v \in V \setminus V(P) : \Phi(P) + C_{v_k, v}^f(\phi_k) + C_{v, 0}^f\bigl(\max(0, \phi_k + \psi_{v_k, v})\bigr) \leq B \right\}
   \label{eq:wp}
 \end{equation}
-where $C_{i,j}^f(t) = C_{ij} \cdot (1 + \lambda\, t / B)$ is the fatigue-adjusted cost of arc $(i,j)$ at elapsed time $t$, as defined in~\eqref{eq:fatigue_cost}, evaluated at the cumulative elapsed time along the path.
+where $C_{i,j}^f(\cdot)$ is the fatigue-adjusted cost of arc $(i,j)$ as defined in~\eqref{eq:fatigue_cost}, evaluated at the deterministic state reached at each point along $P$ then closing through $v$.
 The set $W(P)$ contains exactly those nodes through which the path can be completed into a budget-feasible cycle.
 The path inequality states:
 \begin{equation}
@@ -602,7 +609,7 @@ The path inequality states:
 \end{equation}
 Intuitively, if all path arcs are used (first sum is large), then either some interior path nodes are unvisited (second and third terms compensate), or the endpoint $v_k$ connects to a node in $W(P)$ (last sum compensates).
 If neither holds, the path cannot be completed within budget.
-The fatigue model makes $W(P)$ smaller than in the symmetric case---the fatigue-inflated return cost from $v_k$ restricts the set of feasible closing nodes---producing tighter cuts on high-fatigue instances.
+As in the original model, the fatigue-inflated return cost from $v_k$ restricts $W(P)$ relative to the fatigue-free case, producing tighter cuts on high-fatigue instances; the effect is now asymmetric in $\rho$ as well as in $\lambda$, since a downhill-heavy prefix leaves more headroom in $\phi_k$ than an uphill-heavy one of the same base cost.
 
 \subsection{Separation Routines}
 \label{sec:separation}
@@ -613,14 +620,14 @@ The loop terminates when no violated cuts are found or a maximum number of itera
 Below we describe how violated instances of each cut family are identified.
 
 \paragraph{Subtour and connectivity cuts.}
-A directed support graph $G^* = (V^*, A^*)$ is constructed from arcs with $x_{ij}^* > 0.5$.
+A directed support graph $H^* = (V^*, A^*)$ is constructed from arcs with $x_{ij}^* > 0.5$.
 Two complementary procedures are applied:
 \begin{enumerate}[nosep]
   \item \emph{Kosaraju SCC detection.}
-        Kosaraju's algorithm identifies all strongly connected components of $G^*$ in $O(|V^*| + |A^*|)$ time.
+        Kosaraju's algorithm identifies all strongly connected components of $H^*$ in $O(|V^*| + |A^*|)$ time.
         Any SCC not containing the depot yields a violated subset $S$, and all four cut types~(\cref{eq:sec,eq:outcut,eq:incut,eq:twocut}) are added for $S$.
   \item \emph{Reverse BFS.}
-        A reverse BFS from the depot identifies nodes that can reach the depot in $G^*$.
+        A reverse BFS from the depot identifies nodes that can reach the depot in $H^*$.
         Any visited node ($y_i^* > 0.5$) not in this reachable set requires an outgoing connectivity cut.
 \end{enumerate}
 This two-phase separation is essential for the asymmetric OP\@: Kosaraju detects closed subtours, while the reverse BFS catches paths that leave the depot but cannot return.
@@ -636,8 +643,9 @@ Arcs with $x_{ij}^* > 0$ are sorted by decreasing $x_{ij}^*$ and accumulated gre
 The resulting set $\mathcal{C}$ defines a violated cover if $\sum_{(i,j) \in \mathcal{C}} x_{ij}^* > |\mathcal{C}| - 1$, i.e., the LP uses more of these arcs than any feasible solution allows.
 Each violated cover is optionally strengthened via sequential lifting.
 Up to 3 cover cuts are added per cut-loop iteration; adding more would slow the LP solve without proportional improvement in the bound.
-To account for fatigue, the arc weights used in the greedy accumulation are inflated from the base cost $C_{ij}$ to $C_{ij}(1 + \lambda\, C_{0i} / B)$, reflecting the minimum possible fatigue cost of each arc (since the earliest arrival at node $i$ is $C_{0i}$).
-This produces smaller covers---fewer arcs are needed to exceed $B$---yielding tighter inequalities.
+To account for fatigue, the arc weights used in the greedy accumulation are inflated from the base cost $C_{ij}$ to $C_{ij}\bigl(1 + \lambda\, \max(\check{G}_i, 0)\bigr)$: the true clipped state satisfies $F_i \geq \check{G}_i$ always (as $\check{G}_i$ is a valid lower bound on the unclipped state, \cref{eq:ghat}), and $F_i \geq 0$ trivially, so $\max(\check{G}_i,0)$ is the tightest simple lower bound on the minimum possible fatigue state at $i$ available without solving for the specific route.
+This produces smaller covers---fewer arcs are needed to exceed $B$---yielding tighter inequalities, and is only useful (multiplier $>1$) on arcs where $\check{G}_i$ is positive, i.e.\ where every budget-admissible route reaching $i$ is net uphill.
+The original model instead inflated weights by $C_{ij}(1 + \lambda\, C_{0i}/B)$, using the direct depot cost $C_{0i}$ as a proxy for minimum elapsed time; that proxy has no valid meaning under the revised, elevation-driven model and is not used here.
 
 \paragraph{(B2) Routing infeasibility cuts.}
 Nodes with $y_i^* > 0.5$ are sorted by decreasing $y_i^*$ and added one by one to a candidate set $Q$.
@@ -646,14 +654,15 @@ When $C_{\text{assign}}(Q) > B$ and $\sum_{i \in Q} y_i^* > |Q| - 1$, a violated
 The set $Q$ is then minimised: nodes are removed in order of increasing $y_i^*$ while $C_{\text{assign}}(Q)$ remains above $B$, yielding a minimal infeasible set and hence the tightest cut.
 
 \paragraph{(B3) Cycle cover cuts.}
-Short directed cycles (length 3--4) are enumerated in the support graph $G^*$.
+Short directed cycles (length 3--4) are enumerated in the support graph $H^*$.
 For each cycle $F$, the base cost $\sum_{(i,j) \in F} C_{ij}$ is computed.
 If $\sum_{(i,j) \in F} C_{ij} > B$ and the inequality~\eqref{eq:cycle_cover} is violated by $(x^*, y^*)$, the cut is added.
 
 \paragraph{(B4) Path inequality cuts.}
-Directed paths of length 2--3 are enumerated in $G^*$.
-For each path $P = (v_1 \to \cdots \to v_k)$, the feasible closing set $W(P)$ is computed using the base cost matrix $C_{ij}$ (not the LP solution values): the elapsed time at each path node is accumulated as $t_\ell = \sum_{m=0}^{\ell-1} C_{v_m, v_{m+1}}$, and the fatigue-adjusted cost of each subsequent arc is evaluated at this deterministic elapsed time.
-If $W(P)$ is non-empty (otherwise the path is infeasible and handled by other cuts) and the inequality~\eqref{eq:path_ineq} is violated by the current LP solution, the cut is added.
+Directed paths of length 2--3 are enumerated in $H^*$.
+For each path $P = (v_1 \to \cdots \to v_k)$, the feasible closing set $W(P)$ is computed using the base matrices $C_{ij}$, $\psi_{ij}$ (not the LP solution values): the fatigue state at each path node is accumulated deterministically via the clip recursion $\phi_\ell = \max(0, \phi_{\ell-1} + \psi_{v_{\ell-1},v_\ell})$, and the fatigue-adjusted cost of each subsequent arc is evaluated at this state, as in~\eqref{eq:wp}.
+If $\Phi(P)$ (the path's own fatigue-adjusted cost) already exceeds $B$, $W(P)$ is empty, or a direct return $v_k \to 0$ is itself budget-feasible (in which case the path inequality would add nothing, since closing directly is always available), the path is skipped.
+Otherwise the cut is added if inequality~\eqref{eq:path_ineq} is violated by the current LP solution.
 
 % ════════════════════════════════════════════════════════════════
 \section{Solution Methods}
