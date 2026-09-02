@@ -32,8 +32,11 @@ static std::string read_file(const std::string& path) {
 
 struct Input {
     std::vector<std::vector<double>> cm;
+    std::vector<std::vector<double>> gain;
+    std::vector<std::vector<double>> loss;
     std::vector<double> pts;
     double bud_eff = 0.0, bud_raw = 0.0, fatigue_rate = 0.0;
+    double rho = 0.5;
 };
 
 static Input parse_input(const std::string& json_str) {
@@ -65,15 +68,24 @@ static Input parse_input(const std::string& json_str) {
             if(json_str[pos]==','){++pos;continue;} if(json_str[pos]=='[') m.push_back(parse_array1d(pos));}
         return m;
     };
+    auto find_key_opt = [&](const std::string& key) -> bool {
+        std::string k="\""+key+"\":"; auto p=json_str.find(k,0);
+        if(p==std::string::npos) return false; i=p+k.size(); return true;
+    };
     auto find_key = [&](const std::string& key) {
-        std::string k="\""+key+"\":"; auto p=json_str.find(k,i);
-        if(p==std::string::npos) throw std::runtime_error("Missing: "+key); i=p+k.size();
+        if (!find_key_opt(key)) throw std::runtime_error("Missing: "+key);
     };
     find_key("cm"); inp.cm=parse_array2d(i);
     find_key("pts"); inp.pts=parse_array1d(i);
     find_key("bud_eff"); i=skip_ws(i); inp.bud_eff=parse_number(i);
     find_key("bud_raw"); i=skip_ws(i); inp.bud_raw=parse_number(i);
     find_key("fatigue_rate"); i=skip_ws(i); inp.fatigue_rate=parse_number(i);
+    const int n = static_cast<int>(inp.pts.size());
+    if (find_key_opt("gain")) { inp.gain = parse_array2d(i); }
+    else { inp.gain.assign(n, std::vector<double>(n, 0.0)); }
+    if (find_key_opt("loss")) { inp.loss = parse_array2d(i); }
+    else { inp.loss.assign(n, std::vector<double>(n, 0.0)); }
+    if (find_key_opt("rho_default")) { i = skip_ws(i); inp.rho = parse_number(i); }
     return inp;
 }
 
@@ -97,6 +109,25 @@ static double rcost_fatigue(const std::vector<std::vector<double>>& cm,
     return total;
 }
 
+// Corrected asymmetric, clipped fatigue model (Sec 3.6 rework). Used for
+// all feasibility gating below, replacing the plain rcost_fatigue calls.
+static inline double psi_arc(const Input& inp, int i, int j, double rho) {
+    return inp.gain[i][j] - rho * inp.loss[i][j];
+}
+static double rcost_fatigue_asym(const Input& inp, const std::vector<int>& route, double rho) {
+    if (route.empty()) return inp.cm[0][0];
+    std::vector<int> seq = {0};
+    seq.insert(seq.end(), route.begin(), route.end());
+    seq.push_back(0);
+    double total = 0.0, F = 0.0;
+    for (size_t k = 0; k + 1 < seq.size(); ++k) {
+        int a = seq[k], b = seq[k + 1];
+        total += inp.cm[a][b] * (1.0 + inp.fatigue_rate * F);
+        F = std::max(0.0, F + psi_arc(inp, a, b, rho));
+    }
+    return total;
+}
+
 static double rpts(const std::vector<double>& pts, const std::vector<int>& route) {
     double s=0; for(int v:route) s+=pts[v]; return s;
 }
@@ -114,7 +145,7 @@ std::vector<int> solve_greedy(const Input& inp) {
             double go=inp.cm[cur][j], back=inp.cm[j][0];
             if(!std::isfinite(go)||!std::isfinite(back)) continue;
             auto trial = route; trial.push_back(j);
-            if(rcost_fatigue(inp.cm, trial, inp.bud_raw, inp.fatigue_rate) > inp.bud_raw) continue;
+            if(rcost_fatigue_asym(inp, trial, inp.rho) > inp.bud_raw) continue;
             double ratio=inp.pts[j]/std::max(go,1e-9);
             if(ratio>br){br=ratio;bj=j;}
         }
@@ -143,7 +174,7 @@ std::vector<int> solve_ga(const Input& inp, double time_limit_s=2.0, unsigned se
         std::shuffle(perm.begin(),perm.end(),rng);
         for(int j:perm) {
             auto trial=route; trial.push_back(j);
-            if(rcost_fatigue(inp.cm,trial,inp.bud_raw,inp.fatigue_rate)<=inp.bud_raw)
+            if(rcost_fatigue_asym(inp, trial, inp.rho)<=inp.bud_raw)
                 route.push_back(j);
         }
         pop.push_back(route);
@@ -164,7 +195,7 @@ std::vector<int> solve_ga(const Input& inp, double time_limit_s=2.0, unsigned se
             int cut=p1.empty()?0:randi(0,(int)p1.size()-1);
             for(int k=0;k<=cut&&k<(int)p1.size();++k){child.push_back(p1[k]);used.insert(p1[k]);}
             for(int v:p2) if(!used.count(v)) child.push_back(v);
-            while(!child.empty()&&rcost_fatigue(inp.cm,child,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw) {
+            while(!child.empty()&&rcost_fatigue_asym(inp, child, inp.rho)>inp.bud_raw) {
                 int worst=0; double wv=inp.pts[child[0]];
                 for(int k=1;k<(int)child.size();++k)
                     if(inp.pts[child[k]]<wv){wv=inp.pts[child[k]];worst=k;}
@@ -173,7 +204,7 @@ std::vector<int> solve_ga(const Input& inp, double time_limit_s=2.0, unsigned se
             if(child.size()>=2&&randu()<0.3) {
                 int a=randi(0,(int)child.size()-1), b=randi(0,(int)child.size()-1);
                 std::swap(child[a],child[b]);
-                if(rcost_fatigue(inp.cm,child,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw)
+                if(rcost_fatigue_asym(inp, child, inp.rho)>inp.bud_raw)
                     std::swap(child[a],child[b]);
             }
             next_pop.push_back(child);
@@ -209,7 +240,7 @@ std::vector<int> solve_aco(const Input& inp, double time_limit_s=2.0, unsigned s
                 for(int j=1;j<n;++j) {
                     if(vis[j]||!std::isfinite(inp.cm[cur][j])) continue;
                     auto trial=route; trial.push_back(j);
-                    if(rcost_fatigue(inp.cm,trial,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw) continue;
+                    if(rcost_fatigue_asym(inp, trial, inp.rho)>inp.bud_raw) continue;
                     double attract=std::pow(tau[cur][j],alpha)*std::pow(inp.pts[j]/std::max(inp.cm[cur][j],1e-9),beta);
                     candidates.push_back({j,attract}); total+=attract;
                 }
@@ -283,7 +314,7 @@ std::vector<int> solve_sa(const Input& inp, double time_limit_s=2.0, unsigned se
             int oi=randi(0,(int)nr.size()-1), old=nr[oi], nw=unv[randi(0,(int)unv.size()-1)];
             nr[oi]=nw; nv[old]=false; nv[nw]=true;
         }
-        if(rcost_fatigue(inp.cm,nr,inp.bud_raw,inp.fatigue_rate)>inp.bud_raw) continue;
+        if(rcost_fatigue_asym(inp, nr, inp.rho)>inp.bud_raw) continue;
         double ns=rpts(inp.pts,nr), delta=ns-cur_score;
         if(delta>0||(delta<0&&temp>1e-6&&randu()<std::exp(delta/temp))) {
             route=nr; vis=nv; cur_score=ns;
