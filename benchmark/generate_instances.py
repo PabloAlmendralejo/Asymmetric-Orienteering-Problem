@@ -61,6 +61,14 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
 
     # Asymmetric cost matrix
     cm = np.zeros((total, total))
+    # Synthetic phi_plus / phi_minus: reuse the same "positive dy = uphill"
+    # convention already used for the cost asymmetry above, scaled by the
+    # asymmetry parameter so that asymmetry=0 (fully symmetric instances)
+    # also gives gain=loss=0 everywhere -- i.e. the corrected fatigue term
+    # vanishes exactly like the old one did in that limit, keeping that
+    # extreme case comparable across model versions.
+    gain = np.zeros((total, total))
+    loss = np.zeros((total, total))
     for i in range(total):
         for j in range(total):
             if i == j:
@@ -76,6 +84,10 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
             # Terrain noise (10%)
             terrain_noise = 1.0 + rng.uniform(-0.1, 0.1)
             cm[i, j] = base_dist * max(asym_mult * terrain_noise, 0.2)
+
+            dz = asymmetry * dy  # synthetic "elevation" proxy, same units as slope_factor*base_dist
+            gain[i, j] = max(dz, 0.0)
+            loss[i, j] = max(-dz, 0.0)
 
     # Budget from nearest-neighbor estimate
     nn_cost = _nearest_neighbor_cost(cm, n)
@@ -95,10 +107,13 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
 
     return {
         'cm': cm.tolist(),
+        'gain': gain.tolist(),
+        'loss': loss.tolist(),
         'pts': pts.tolist(),
         'bud_eff': float(bud_eff),
         'bud_raw': float(bud_raw),
         'fatigue_rate': float(fatigue_rate),
+        'rho_default': 0.5,
     }, {
         'n': n,
         'asymmetry_param': asymmetry,
