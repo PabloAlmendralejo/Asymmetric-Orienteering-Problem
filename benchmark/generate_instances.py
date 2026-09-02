@@ -18,6 +18,28 @@ import json
 import os
 import argparse
 from itertools import product
+from scipy.optimize import minimize_scalar
+
+
+def _derive_mu():
+    """Distance-to-elevation fatigue weight, derived from the Minetti curve.
+
+    Duplicated (not imported) from python/core/cost_functions.derive_mu()
+    since this generator is otherwise self-contained -- keep the two in
+    sync if the Minetti coefficients or derivation ever change.
+    """
+    coeffs = np.array([280.5, -58.7, -76.8, 51.9, 19.6, 2.5])
+
+    def C(i):
+        return float(np.polyval(coeffs, np.clip(i, -0.45, 0.45)))
+
+    c0 = C(0.0)
+
+    def cost_per_vert_m(i):
+        return C(i) / i
+
+    res = minimize_scalar(cost_per_vert_m, bounds=(0.01, 0.45), method='bounded')
+    return c0 / cost_per_vert_m(res.x)
 
 
 def _nearest_neighbor_cost(cm, n):
@@ -69,6 +91,7 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
     # extreme case comparable across model versions.
     gain = np.zeros((total, total))
     loss = np.zeros((total, total))
+    dist_m = np.zeros((total, total))
     for i in range(total):
         for j in range(total):
             if i == j:
@@ -88,6 +111,7 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
             dz = asymmetry * dy  # synthetic "elevation" proxy, same units as slope_factor*base_dist
             gain[i, j] = max(dz, 0.0)
             loss[i, j] = max(-dz, 0.0)
+            dist_m[i, j] = base_dist  # raw horizontal distance for the mu*dist fatigue term
 
     # Budget from nearest-neighbor estimate
     nn_cost = _nearest_neighbor_cost(cm, n)
@@ -109,11 +133,13 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
         'cm': cm.tolist(),
         'gain': gain.tolist(),
         'loss': loss.tolist(),
+        'dist': dist_m.tolist(),
         'pts': pts.tolist(),
         'bud_eff': float(bud_eff),
         'bud_raw': float(bud_raw),
         'fatigue_rate': float(fatigue_rate),
         'rho_default': 0.5,
+        'mu_default': float(_derive_mu()),
     }, {
         'n': n,
         'asymmetry_param': asymmetry,

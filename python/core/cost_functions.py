@@ -34,6 +34,31 @@ def minetti_factor(slope_signed):
     return cost / _MINETTI_FLAT
 
 
+def derive_mu():
+    """Distance-to-elevation fatigue weight, derived from the Minetti curve.
+
+    mu converts 1 metre of horizontal distance into "vertical-metre
+    equivalent" fatigue units, for combining with gain/loss (phi_plus /
+    phi_minus) in the asymmetric fatigue model's psi_ij = gain - rho*loss
+    + mu*dist (Sec. 3.6 rework). Derived, not fitted: mu = C(0) / (C(i*)/i*),
+    where C(i) is the Minetti metabolic cost (J/kg/m) at gradient i and i*
+    is the gradient that minimises cost per VERTICAL metre climbed (the
+    most energy-efficient climbing angle implied by the same curve already
+    used for the base cost matrix). This keeps the distance term physically
+    grounded in the same model as the rest of the cost function rather than
+    a free/fitted parameter.
+    """
+    from scipy.optimize import minimize_scalar
+    c0 = float(minetti_cost(0.0))
+
+    def cost_per_vert_m(i):
+        return float(minetti_cost(i)) / i
+
+    res = minimize_scalar(cost_per_vert_m, bounds=(0.01, 0.45), method='bounded')
+    cost_per_vert = cost_per_vert_m(res.x)
+    return c0 / cost_per_vert
+
+
 def fatigue_multiplier(elapsed_fraction, fatigue_rate, terrain_difficulty=1.0):
     """Linear fatigue model: cost increases with elapsed time."""
     eff = elapsed_fraction * terrain_difficulty

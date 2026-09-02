@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from core.cost_functions import (
     WT, minetti_factor, build_base_cost_from_omap, build_display_cost,
-    cost_to_veg_proxy, cost_str, effective_budget
+    cost_to_veg_proxy, cost_str, effective_budget, derive_mu
 )
 from core.terrain_analysis import build_base_cost_with_hcr
 from core.pathfinding import (
@@ -153,7 +153,7 @@ def run_main_route(cfg, terrain):
     # Cost matrix
     print(f"\n[5/7] Cost matrix ({len(nodes)} nodes, DS={cfg['downsample']})...")
     t0 = time.time()
-    cm, gain_m, loss_m = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'])
+    cm, gain_m, loss_m, dist_m = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'], cell_m=cfg['resolution'])
     tm = time.time() - t0
     print(f"  Done in {tm:.1f}s")
 
@@ -197,7 +197,7 @@ def run_main_route(cfg, terrain):
         'valid': valid, 'base_cost': base_cost, 'sx': sx, 'sy': sy,
         'veg_grid': veg_grid, 'hh': hh, 'ctrls': ctrls,
         'route': route, 'cm': cm, 'gain_m': gain_m, 'loss_m': loss_m,
-        'pa': pa, 'nodes': nodes,
+        'dist_m': dist_m, 'pa': pa, 'nodes': nodes,
     }
 
 
@@ -237,21 +237,23 @@ def export_jsons(cfg, terrain, pipeline_result):
             nodes.append((cx, cy)); pa.append(float(pts))
         pa = np.array(pa)
 
-        cm, gain_m, loss_m = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'])
+        cm, gain_m, loss_m, dist_m = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'], cell_m=cfg['resolution'])
         fm = np.isfinite(cm)
         if (~fm).sum() - len(nodes) > 0:
             cm[~fm] = cm[fm].max() * 3
             # Arcs made artificially "reachable" by the 3x penalty carry no
-            # real terrain profile; zero out gain/loss so they don't bias
-            # the fatigue bound computed in C++.
+            # real terrain profile; zero out gain/loss/dist so they don't
+            # bias the fatigue bound computed in C++.
             gain_m[~fm] = 0.0
             loss_m[~fm] = 0.0
+            dist_m[~fm] = 0.0
 
         filename = f"op_input_{dist_name}.json"
         op_data = {
             "cm": cm.tolist(),
             "gain": gain_m.tolist(),
             "loss": loss_m.tolist(),
+            "dist": dist_m.tolist(),
             "pts": pa.tolist(),
             "bud_eff": float(bud_eff),
             "bud_raw": float(bud_raw),
@@ -261,6 +263,12 @@ def export_jsons(cfg, terrain, pipeline_result):
             # Treated as a sensitivity parameter, swept at solve time in
             # the C++ solver rather than fixed here.
             "rho_default": 0.5,
+            # mu: distance-to-elevation fatigue weight (vertical-metre
+            # equivalents per metre of horizontal distance), derived from
+            # the Minetti curve -- see cost_functions.derive_mu(). Not a
+            # free/fitted parameter, so exported as a single fixed value
+            # rather than swept.
+            "mu_default": float(derive_mu()),
         }
         with open(filename, 'w') as f:
             json.dump(op_data, f, indent=2)

@@ -35,9 +35,11 @@ struct Input {
     std::vector<std::vector<double>> cm;
     std::vector<std::vector<double>> gain;
     std::vector<std::vector<double>> loss;
+    std::vector<std::vector<double>> dist;   // cumulative horizontal path length (metres)
     std::vector<double> pts;
     double bud_eff = 0.0, bud_raw = 0.0, fatigue_rate = 0.0;
     double rho = 0.5;
+    double mu = 0.0;   // distance-to-elevation fatigue weight, derived not swept (see cpp/solver_flow_torremocha.cpp)
 };
 
 static Input parse_input(const std::string& json_str) {
@@ -108,7 +110,10 @@ static Input parse_input(const std::string& json_str) {
     else { inp.gain.assign(n, std::vector<double>(n, 0.0)); }
     if (find_key_opt("loss")) { inp.loss = parse_array2d(i); }
     else { inp.loss.assign(n, std::vector<double>(n, 0.0)); }
+    if (find_key_opt("dist")) { inp.dist = parse_array2d(i); }
+    else { inp.dist.assign(n, std::vector<double>(n, 0.0)); }
     if (find_key_opt("rho_default")) { i = skip_ws(i); inp.rho = parse_number(i); }
+    if (find_key_opt("mu_default")) { i = skip_ws(i); inp.mu = parse_number(i); }
 
     return inp;
 }
@@ -140,7 +145,7 @@ static double rcost_fatigue(const std::vector<std::vector<double>>& cm, const st
 
 // ── Non-linear asymmetric fatigue model (Sec 3.6 rework) ──────────────
 static inline double psi_arc(const Input& inp, int i, int j, double rho) {
-    return inp.gain[i][j] - rho * inp.loss[i][j];
+    return inp.gain[i][j] - rho * inp.loss[i][j] + inp.mu * inp.dist[i][j];
 }
 
 static inline bool arc_survives_base(const Input& inp, int i, int j) {
@@ -1548,10 +1553,11 @@ struct Solver {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 static void run_map(const std::string& in_path, const std::string& out_path,
-                     double rho_override = -1.0) {
+                     double rho_override = -1.0, double lambda_override = -1.0) {
     std::cerr << "\n=== " << in_path << " ===\n";
     Input inp = parse_input(read_file(in_path));
     if (rho_override >= 0.0) inp.rho = rho_override;
+    if (lambda_override >= 0.0) inp.fatigue_rate = lambda_override;
 
     auto t_sa = std::chrono::steady_clock::now();
     auto sa_route = solve_sa_iterated(inp);
@@ -1574,6 +1580,7 @@ static void run_map(const std::string& in_path, const std::string& out_path,
     std::ofstream out(out_path);
     out << "{\n";
     out << "  \"rho\": " << inp.rho << ",\n";
+    out << "  \"lambda\": " << inp.fatigue_rate << ",\n";
     out << "  \"sa\": {\"pts\": " << sa_pts << ", \"nodes\": " << sa_route.size()
         << ", \"elapsed_s\": " << sa_elapsed << ", \"base_cost\": " << sa_base
         << ", \"fatigue_cost\": " << sa_fatigue
@@ -1604,13 +1611,15 @@ struct MapResult {
 
 int main(int argc, char* argv[]) {
     std::string input_dir = "instances";
-    bool rho_sweep = false;
+    bool rho_sweep = false, lambda_sweep = false;
     for (int a = 1; a < argc; ++a) {
         std::string arg = argv[a];
         if (arg == "--rho-sweep") rho_sweep = true;
+        else if (arg == "--lambda-sweep") lambda_sweep = true;
         else input_dir = arg;
     }
     static const std::vector<double> RHO_SWEEP_VALUES = {0.0, 0.25, 0.5, 0.75, 1.0};
+    static const std::vector<double> LAMBDA_SWEEP_VALUES = {0.0, 1e-5, 1.75e-5, 5e-5, 1e-4};
 
     // Scan input directory for op_input_*.json files
     std::vector<std::pair<std::string,std::string>> maps;
@@ -1640,6 +1649,21 @@ int main(int argc, char* argv[]) {
             }
         }
         std::cerr << "\nrho sweep done.\n";
+        return 0;
+    }
+
+    if (lambda_sweep) {
+        for (const auto& [in, out] : maps) {
+            for (double lam : LAMBDA_SWEEP_VALUES) {
+                std::string suffix = "_lam" + std::to_string(lam).substr(0, 8);
+                std::string out_lam = out.substr(0, out.size() - 5) + suffix + ".json";
+                try { run_map(in, out_lam, -1.0, lam); }
+                catch (const std::exception& e) {
+                    std::cerr << "Error on " << in << " (lambda=" << lam << "): " << e.what() << '\n';
+                }
+            }
+        }
+        std::cerr << "\nlambda sweep done.\n";
         return 0;
     }
 

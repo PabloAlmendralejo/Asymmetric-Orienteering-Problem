@@ -40,9 +40,11 @@ struct Input {
     std::vector<std::vector<double>> cm;
     std::vector<std::vector<double>> gain;
     std::vector<std::vector<double>> loss;
+    std::vector<std::vector<double>> dist;   // cumulative horizontal path length (metres)
     std::vector<double> pts;
     double bud_eff = 0.0, bud_raw = 0.0, fatigue_rate = 0.0;
     double rho = 0.5;
+    double mu = 0.0;   // distance-to-elevation fatigue weight, derived not swept (see cpp/solver_flow_torremocha.cpp)
 };
 
 static Input parse_input(const std::string& json_str) {
@@ -113,7 +115,10 @@ static Input parse_input(const std::string& json_str) {
     else { inp.gain.assign(n, std::vector<double>(n, 0.0)); }
     if (find_key_opt("loss")) { inp.loss = parse_array2d(i); }
     else { inp.loss.assign(n, std::vector<double>(n, 0.0)); }
+    if (find_key_opt("dist")) { inp.dist = parse_array2d(i); }
+    else { inp.dist.assign(n, std::vector<double>(n, 0.0)); }
     if (find_key_opt("rho_default")) { i = skip_ws(i); inp.rho = parse_number(i); }
+    if (find_key_opt("mu_default")) { i = skip_ws(i); inp.mu = parse_number(i); }
 
     return inp;
 }
@@ -145,7 +150,7 @@ static double rcost_fatigue(const std::vector<std::vector<double>>& cm, const st
 
 // ── Non-linear asymmetric fatigue model (Sec 3.6 rework) ──────────────
 static inline double psi_arc(const Input& inp, int i, int j, double rho) {
-    return inp.gain[i][j] - rho * inp.loss[i][j];
+    return inp.gain[i][j] - rho * inp.loss[i][j] + inp.mu * inp.dist[i][j];
 }
 
 static inline bool arc_survives_base(const Input& inp, int i, int j) {

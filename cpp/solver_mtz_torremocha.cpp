@@ -34,9 +34,11 @@ struct Input {
     std::vector<std::vector<double>> cm;
     std::vector<std::vector<double>> gain;   // phi_plus: cumulative uphill metres per arc (i->j)
     std::vector<std::vector<double>> loss;   // phi_minus: cumulative downhill metres per arc (i->j)
+    std::vector<std::vector<double>> dist;   // cumulative horizontal path length (metres) per arc (i->j)
     std::vector<double> pts;
     double bud_eff = 0.0, bud_raw = 0.0, fatigue_rate = 0.0;
     double rho = 0.5;  // recovery fraction on downhill; sensitivity parameter, see main()
+    double mu = 0.0;   // distance-to-elevation fatigue weight, derived not swept (see solver_flow_torremocha.cpp)
 };
 
 static Input parse_input(const std::string& json_str) {
@@ -116,8 +118,17 @@ static Input parse_input(const std::string& json_str) {
         std::cerr << "  [warn] input has no 'loss' matrix (old format) -- phi_minus=0\n";
         inp.loss.assign(n, std::vector<double>(n, 0.0));
     }
+    if (find_key_opt("dist")) {
+        inp.dist = parse_array2d(i);
+    } else {
+        std::cerr << "  [warn] input has no 'dist' matrix (old format) -- distance fatigue term=0\n";
+        inp.dist.assign(n, std::vector<double>(n, 0.0));
+    }
     if (find_key_opt("rho_default")) {
         i = skip_ws(i); inp.rho = parse_number(i);
+    }
+    if (find_key_opt("mu_default")) {
+        i = skip_ws(i); inp.mu = parse_number(i);
     }
 
     return inp;
@@ -150,7 +161,7 @@ static double rcost_fatigue(const std::vector<std::vector<double>>& cm, const st
 
 // ── Non-linear asymmetric fatigue model (Sec 3.6 rework) ──────────────
 static inline double psi_arc(const Input& inp, int i, int j, double rho) {
-    return inp.gain[i][j] - rho * inp.loss[i][j];
+    return inp.gain[i][j] - rho * inp.loss[i][j] + inp.mu * inp.dist[i][j];
 }
 
 static inline bool arc_survives_base(const Input& inp, int i, int j) {
@@ -1205,11 +1216,12 @@ struct Solver {
 // ΓöÇΓöÇ Main ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static void run_map(const std::string& in_path, const std::string& out_path,
-                     double rho_override = -1.0) {
+                     double rho_override = -1.0, double lambda_override = -1.0) {
     std::cerr << "\n=== " << in_path << " ===\n";
     Input inp = parse_input(read_file(in_path));
     if (rho_override >= 0.0) inp.rho = rho_override;
-    std::cerr << "  rho = " << inp.rho << "\n";
+    if (lambda_override >= 0.0) inp.fatigue_rate = lambda_override;
+    std::cerr << "  rho = " << inp.rho << ", lambda = " << inp.fatigue_rate << "\n";
 
     auto t_sa = std::chrono::steady_clock::now();
     auto sa_route = solve_sa_iterated(inp);
@@ -1232,6 +1244,7 @@ static void run_map(const std::string& in_path, const std::string& out_path,
     std::ofstream out(out_path);
     out << "{\n";
     out << "  \"rho\": " << inp.rho << ",\n";
+    out << "  \"lambda\": " << inp.fatigue_rate << ",\n";
     out << "  \"sa\": {\"pts\": " << sa_pts << ", \"nodes\": " << sa_route.size()
         << ", \"elapsed_s\": " << sa_elapsed << ", \"base_cost\": " << sa_base
         << ", \"fatigue_cost\": " << sa_fatigue
@@ -1263,11 +1276,14 @@ struct MapResult {
 };
 
 static const std::vector<double> RHO_SWEEP_VALUES = {0.0, 0.25, 0.5, 0.75, 1.0};
+static const std::vector<double> LAMBDA_SWEEP_VALUES = {0.0, 1e-5, 1.75e-5, 5e-5, 1e-4};
 
 int main(int argc, char** argv) {
-    bool rho_sweep = false;
-    for (int a = 1; a < argc; ++a)
+    bool rho_sweep = false, lambda_sweep = false;
+    for (int a = 1; a < argc; ++a) {
         if (std::string(argv[a]) == "--rho-sweep") rho_sweep = true;
+        if (std::string(argv[a]) == "--lambda-sweep") lambda_sweep = true;
+    }
 
     const std::vector<std::pair<std::string,std::string>> maps = {
     {"op_input_torremocha_standard.json",      "op_output_torremocha_standard.json"},
@@ -1292,6 +1308,22 @@ int main(int argc, char** argv) {
         }
         std::cerr << "\nrho sweep done: " << maps.size() << " maps x "
                    << RHO_SWEEP_VALUES.size() << " rho values.\n";
+        return 0;
+    }
+
+    if (lambda_sweep) {
+        for (const auto& [in, out] : maps) {
+            for (double lam : LAMBDA_SWEEP_VALUES) {
+                std::string suffix = "_lam" + std::to_string(lam).substr(0, 8);
+                std::string out_lam = out.substr(0, out.size() - 5) + suffix + ".json";
+                try { run_map(in, out_lam, -1.0, lam); }
+                catch (const std::exception& e) {
+                    std::cerr << "Error on " << in << " (lambda=" << lam << "): " << e.what() << '\n';
+                }
+            }
+        }
+        std::cerr << "\nlambda sweep done: " << maps.size() << " maps x "
+                   << LAMBDA_SWEEP_VALUES.size() << " lambda values.\n";
         return 0;
     }
 

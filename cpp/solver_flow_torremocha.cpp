@@ -34,9 +34,15 @@ struct Input {
     std::vector<std::vector<double>> cm;
     std::vector<std::vector<double>> gain;   // phi_plus: cumulative uphill metres per arc (i->j)
     std::vector<std::vector<double>> loss;   // phi_minus: cumulative downhill metres per arc (i->j)
+    std::vector<std::vector<double>> dist;   // cumulative horizontal path length (metres) per arc (i->j)
     std::vector<double> pts;
     double bud_eff = 0.0, bud_raw = 0.0, fatigue_rate = 0.0;
     double rho = 0.5;  // recovery fraction on downhill; sensitivity parameter, see main()
+    // mu: distance-to-elevation fatigue weight (vertical-metre equivalents
+    // per metre of horizontal distance), derived from the Minetti curve
+    // (see python/core/cost_functions.derive_mu()) -- not a free/fitted
+    // parameter, so read as a fixed value rather than swept.
+    double mu = 0.0;
 };
 
 static Input parse_input(const std::string& json_str) {
@@ -119,8 +125,17 @@ static Input parse_input(const std::string& json_str) {
         std::cerr << "  [warn] input has no 'loss' matrix (old format) -- phi_minus=0\n";
         inp.loss.assign(n, std::vector<double>(n, 0.0));
     }
+    if (find_key_opt("dist")) {
+        inp.dist = parse_array2d(i);
+    } else {
+        std::cerr << "  [warn] input has no 'dist' matrix (old format) -- distance fatigue term=0\n";
+        inp.dist.assign(n, std::vector<double>(n, 0.0));
+    }
     if (find_key_opt("rho_default")) {
         i = skip_ws(i); inp.rho = parse_number(i);
+    }
+    if (find_key_opt("mu_default")) {
+        i = skip_ws(i); inp.mu = parse_number(i);
     }
 
     return inp;
@@ -152,13 +167,19 @@ static double rcost_fatigue(const std::vector<std::vector<double>>& cm, const st
 }
 
 // ── Non-linear asymmetric fatigue model (Sec 3.6 rework) ──────────────
-// psi_ij = phi_plus_ij - rho * phi_minus_ij: net fatigue contribution of
-// arc (i,j), where phi_plus/phi_minus are cumulative uphill/downhill
-// metres along the cost-optimal path (see python/core/pathfinding.py).
-// rho in [0,1] is the downhill-recovery fraction, treated as a sensitivity
-// parameter (see ghat sweep in main()), not calibrated from a single value.
+// psi_ij = phi_plus_ij - rho*phi_minus_ij + mu*dist_ij: net fatigue
+// contribution of arc (i,j), where phi_plus/phi_minus are cumulative
+// uphill/downhill metres and dist_ij is cumulative horizontal path length
+// (metres), all along the cost-optimal path (see
+// python/core/pathfinding.py). rho in [0,1] is the downhill-recovery
+// fraction, treated as a sensitivity parameter (see rho sweep in main()),
+// not calibrated from a single value. mu converts horizontal metres into
+// vertical-metre-equivalent fatigue units; unlike rho it is not a free
+// parameter -- it is derived from the Minetti curve already used for the
+// base cost (see python/core/cost_functions.derive_mu()) and read fixed
+// from inp.mu, not threaded/swept like rho.
 static inline double psi_arc(const Input& inp, int i, int j, double rho) {
-    return inp.gain[i][j] - rho * inp.loss[i][j];
+    return inp.gain[i][j] - rho * inp.loss[i][j] + inp.mu * inp.dist[i][j];
 }
 
 // Which arcs are structurally admissible for the fatigue-bound graph.
@@ -1276,15 +1297,17 @@ struct Solver {
 
 // ΓöÇΓöÇ Main ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-// rho_override < 0 means "use whatever the JSON's rho_default says".
-// Passing an explicit value is how the sensitivity sweep in main() varies
-// rho without touching the input files.
+// rho_override/lambda_override < 0 means "use whatever the JSON says"
+// (rho_default / fatigue_rate). Passing an explicit value is how the
+// sensitivity sweeps in main() vary rho or lambda without touching the
+// input files.
 static void run_map(const std::string& in_path, const std::string& out_path,
-                     double rho_override = -1.0) {
+                     double rho_override = -1.0, double lambda_override = -1.0) {
     std::cerr << "\n=== " << in_path << " ===\n";
     Input inp = parse_input(read_file(in_path));
     if (rho_override >= 0.0) inp.rho = rho_override;
-    std::cerr << "  rho = " << inp.rho << "\n";
+    if (lambda_override >= 0.0) inp.fatigue_rate = lambda_override;
+    std::cerr << "  rho = " << inp.rho << ", lambda = " << inp.fatigue_rate << "\n";
 
     auto t_sa = std::chrono::steady_clock::now();
     auto sa_route = solve_sa_iterated(inp);
@@ -1311,6 +1334,7 @@ static void run_map(const std::string& in_path, const std::string& out_path,
     std::ofstream out(out_path);
     out << "{\n";
     out << "  \"rho\": " << inp.rho << ",\n";
+    out << "  \"lambda\": " << inp.fatigue_rate << ",\n";
     out << "  \"sa\": {\"pts\": " << sa_pts << ", \"nodes\": " << sa_route.size()
         << ", \"elapsed_s\": " << sa_elapsed << ", \"base_cost\": " << sa_base
         << ", \"fatigue_cost\": " << sa_fatigue
@@ -1348,10 +1372,22 @@ struct MapResult {
 // than assumed. Kept small (5 pts) since each entry re-solves the full B&C.
 static const std::vector<double> RHO_SWEEP_VALUES = {0.0, 0.25, 0.5, 0.75, 1.0};
 
+// lambda (fatigue_rate) has no clean single literature value either: no
+// study reports a pace-decay-per-vertical-metre-of-gain coefficient in a
+// directly usable form (see paper discussion). 1.75e-5 is a rough
+// order-of-magnitude anchor derived from reported end-of-race speed
+// losses (~15-20%) over a representative ultra-trail's cumulative D+
+// (~10,000m), not a fitted/cited constant -- swept rather than fixed for
+// the same reason as rho. --lambda-sweep runs every map once per value
+// below, writing "<name>_lam<v>.json".
+static const std::vector<double> LAMBDA_SWEEP_VALUES = {0.0, 1e-5, 1.75e-5, 5e-5, 1e-4};
+
 int main(int argc, char** argv) {
-    bool rho_sweep = false;
-    for (int a = 1; a < argc; ++a)
+    bool rho_sweep = false, lambda_sweep = false;
+    for (int a = 1; a < argc; ++a) {
         if (std::string(argv[a]) == "--rho-sweep") rho_sweep = true;
+        if (std::string(argv[a]) == "--lambda-sweep") lambda_sweep = true;
+    }
 
     const std::vector<std::pair<std::string,std::string>> maps = {
     {"op_input_torremocha_standard.json",      "op_output_torremocha_standard.json"},
@@ -1376,6 +1412,22 @@ int main(int argc, char** argv) {
         }
         std::cerr << "\nrho sweep done: " << maps.size() << " maps x "
                    << RHO_SWEEP_VALUES.size() << " rho values.\n";
+        return 0;
+    }
+
+    if (lambda_sweep) {
+        for (const auto& [in, out] : maps) {
+            for (double lam : LAMBDA_SWEEP_VALUES) {
+                std::string suffix = "_lam" + std::to_string(lam).substr(0, 8);
+                std::string out_lam = out.substr(0, out.size() - 5) + suffix + ".json";
+                try { run_map(in, out_lam, -1.0, lam); }
+                catch (const std::exception& e) {
+                    std::cerr << "Error on " << in << " (lambda=" << lam << "): " << e.what() << '\n';
+                }
+            }
+        }
+        std::cerr << "\nlambda sweep done: " << maps.size() << " maps x "
+                   << LAMBDA_SWEEP_VALUES.size() << " lambda values.\n";
         return 0;
     }
 
