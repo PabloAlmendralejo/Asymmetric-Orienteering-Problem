@@ -307,27 +307,53 @@ The resulting matrix satisfies $C_{ij} \neq C_{ji}$ in general, with asymmetry m
 \subsection{Cumulative Fatigue Model}
 \label{sec:fatigue}
 
-Athlete performance degrades over time.
-We model fatigue as a linear multiplier on travel cost:
-\begin{equation}
-  f(t) = 1 + \lambda \cdot \frac{t}{B}
-  \label{eq:fatigue}
-\end{equation}
-where $t$ is the elapsed base travel time, $B$ is the raw time budget, and $\lambda$ is the fatigue rate (calibrated in \cref{sec:experiments}).
+\paragraph{Revision note.}
+An earlier version of this model defined fatigue as $f(t) = 1 + \lambda\, t/B$, a multiplier driven purely by cumulative \emph{base cost} $t$ (i.e.\ elapsed effort, in the same units as $B$).
+That model is provably order-invariant: expanding the total fatigue-adjusted cost of a route algebraically collapses to $S + (\lambda/2B)(S^2 - Q)$, where $S = \sum_\ell C_\ell$ and $Q = \sum_\ell C_\ell^2$ over the route's legs---a function of the \emph{multiset} of arcs used, independent of visit order.
+Consequently the AOPF as originally posed reduces to a classical Orienteering Problem with a nonlinear (quadratic) budget, and none of the arrival-time machinery in \cref{sec:formulation} (McCormick linearisation, flow-based time tracking, position-dependent cuts) is actually necessary to solve it.
+The model below replaces the elapsed-cost multiplier with a per-node \emph{fatigue state} driven by the terrain actually traversed---elevation gain, elevation loss, and distance---which breaks this collapse (\cref{sec:order-dependence}).
+\Cref{sec:formulation} (including its cutting-plane subsections) still describes the arrival-time formulation built for the original (collapsing) model; adapting it to the state-based model below is future work (\cref{sec:discussion}).
 
-The effective (fatigue-adjusted) cost of traversing arc $(i,j)$ after elapsed time $t_i$ is:
+\paragraph{Fatigue state.}
+Rather than a single scalar elapsed-cost fraction, we track a per-node fatigue state, accumulated along the path actually taken to reach $i$.
+Each arc $(i,j)$ contributes a signed increment:
 \begin{equation}
-  C^f_{ij}(t_i) = C_{ij} \cdot \left(1 + \lambda \cdot \frac{t_i}{B}\right)
+  \psi_{ij} = \varphi^+_{ij} - \rho\, \varphi^-_{ij} + \mu\, \delta_{ij}
+  \label{eq:psi}
+\end{equation}
+where $\varphi^+_{ij}$ and $\varphi^-_{ij}$ are the cumulative uphill and downhill elevation change (metres) along the cost-optimal path for arc $(i,j)$ (the same path underlying $C_{ij}$, \cref{sec:costmatrix}), and $\delta_{ij}$ is the path length (metres) along that same path.
+$\rho \in [0,1]$ is the fraction of downhill elevation that offsets accumulated fatigue---a physiological unknown (the trade-off between metabolic recovery and eccentric muscular damage on descents is not settled in the literature we are aware of) and is therefore treated as a sensitivity parameter, swept rather than fixed to a single value (\cref{sec:experiments}).
+$\mu \geq 0$ converts horizontal distance into vertical-metre-equivalent fatigue units; unlike $\rho$ it is not a free parameter but is derived from the Minetti curve already underlying $C_{ij}$ (\cref{eq:minetti_factor}):
+\begin{equation}
+  \mu = \dfrac{c(0)}{\min_{i > 0}\; c(i)/i}
+  \label{eq:mu}
+\end{equation}
+i.e.\ the metabolic cost of one flat metre divided by the metabolic cost of the cheapest-to-reach vertical metre (the gradient $i^\star$ that minimises cost per unit of \emph{vertical} rise).
+Both $\varphi^+_{ij}/\varphi^-_{ij}$ and $\delta_{ij}$ are accumulated as byproducts of the same anisotropic Dijkstra used to build $C_{ij}$, at negligible extra cost.
+
+The true fatigue state reflects a physiological floor: fatigue cannot recover below zero.
+Writing $F_0 = 0$ at the depot,
+\begin{equation}
+  F_j = \max\bigl(0,\, F_i + \psi_{ij}\bigr)
+  \label{eq:fatigue_clip}
+\end{equation}
+for the arc $(i,j)$ actually taken to reach $j$.
+The effective (fatigue-adjusted) cost of arc $(i,j)$ departing node $i$ at state $F_i$ is:
+\begin{equation}
+  C^f_{ij}(F_i) = C_{ij} \cdot \bigl(1 + \lambda\, F_i\bigr)
   \label{eq:fatigue_cost}
 \end{equation}
+and the total fatigue-adjusted cost of a route $\sigma = (0, v_1, \ldots, v_k, 0)$ is $D^f(\sigma) = \sum_{\ell} C^f_{v_\ell, v_{\ell+1}}(F_{v_\ell})$, with $F$ propagated leg-by-leg via \cref{eq:fatigue_clip}.
+Because $\lambda$ now multiplies a state expressed in metres of elevation/distance rather than a $[0,1]$-normalised elapsed-budget fraction, it is not dimensionally comparable to the $\lambda$ of the original model and must be recalibrated (\cref{sec:experiments}).
 
-The total fatigue-adjusted route cost for a route $\sigma = (0, v_1, v_2, \ldots, v_k, 0)$ is:
-\begin{equation}
-  D^f(\sigma) = \sum_{\ell=0}^{k} C_{v_\ell, v_{\ell+1}} \cdot \left(1 + \lambda \cdot \frac{T_\ell}{B}\right)
-  \label{eq:total_fatigue}
-\end{equation}
-where $T_\ell = \sum_{m=0}^{\ell-1} C_{v_m, v_{m+1}}$ is the cumulative base cost up to leg $\ell$, and $v_0 = v_{k+1} = 0$ (depot).
-Note that the cumulative base cost $T_\ell$ serves as the elapsed-effort variable in the fatigue multiplier; the budget $B$ is expressed in the same cost units, so $D^f(\sigma)$ represents the total fatigue-adjusted traversal cost of the route.
+\paragraph{Order-dependence.}
+\label{sec:order-dependence}
+Unlike the original model, $D^f(\sigma)$ is not invariant to the order in which a fixed set of arcs is traversed.
+Expanding $D^f$ (ignoring the clip in \cref{eq:fatigue_clip} for the moment, i.e.\ using the unclipped state $G_i = \sum_{m < \ell} \psi_m$) gives a cross term $\lambda \sum_{m < \ell} C_\ell\, \psi_m$.
+In the original model this collapsed because the accumulator was the same quantity being scaled ($\psi_m \propto C_m$ for every arc, making the term $\lambda \sum_{m<\ell} C_\ell C_m$, symmetric under any permutation).
+Here $\psi_{ij}$ (elevation- and distance-driven) is not proportional to $C_{ij}$ (which also depends on the areal terrain weight, \cref{eq:acr}) for arbitrary arcs, so the cross term is generically asymmetric under reordering: two routes visiting the same nodes via the same arcs in different sequences can have substantially different $D^f(\sigma)$.
+The $\max(0, \cdot)$ clip in \cref{eq:fatigue_clip} is a second, independent source of order-dependence on top of this (a downhill-heavy prefix can floor the state in a way a later downhill leg cannot undo retroactively), but---as verified numerically on the implementation---order-dependence already holds without it, as long as $\psi_{ij}/C_{ij}$ is not constant across arcs.
+This is why the distance term in \cref{eq:psi} is defined using raw path length $\delta_{ij}$ rather than a cost-derived quantity: a $\mu$ term correlated with $C_{ij}$ would reintroduce (a component of) the collapsing cross term, diluting the very property this model exists to establish.
 
 
 % ════════════════════════════════════════════════════════════════
@@ -899,9 +925,17 @@ Dijkstra downsampling: $s = 8$.
 B\&C time limit: 900\,s.
 SA iterations: auto-calibrated per instance.
 These values reflect the typical duration of a middle-distance orienteering race.
-The fatigue rate $\lambda = 0.2$ is grounded in exercise physiology: running economy deteriorates by $\sim$5\% after 60\,min at 80\% $\dot{V}\text{O}_{2\text{max}}$ on flat terrain \citep{sproule1998,zanini2025}, but orienteering imposes a 26\% higher oxygen cost than road running \citep{creagh1997} with an additional $\sim$5\% from uneven surfaces \citep{voloshina2015}, approximately doubling the degradation rate.
-The value $\lambda = 0.2$ is a conservative upper estimate that additionally accounts for cognitive navigation load and stop-start movement patterns \citep{millet2010orienteering}.
-The benchmark suite (\cref{sec:benchmark}) evaluates sensitivity across $\lambda \in \{0.0, 0.1, 0.2, 0.3\}$.}
+\paragraph{Calibration under the revised fatigue model (\cref{sec:fatigue}).}
+The value $\lambda = 0.2$ above was calibrated for the original model, where $\lambda$ scaled a $[0,1]$-normalised elapsed-budget fraction $t/B$ (grounded in exercise physiology: running economy deteriorates by $\sim$5\% after 60\,min at 80\% $\dot{V}\text{O}_{2\text{max}}$ on flat terrain \citep{sproule1998,zanini2025}, orienteering's 26\% higher oxygen cost than road running \citep{creagh1997} plus $\sim$5\% from uneven surfaces \citep{voloshina2015} approximately doubling that rate, and a further margin for cognitive navigation load \citep{millet2010orienteering}).
+Under the revised model (\cref{sec:fatigue}), $\lambda$ multiplies the fatigue state $F_i$, which is expressed in metres of elevation and distance rather than a normalised fraction---the two are not dimensionally comparable, and reusing $\lambda = 0.2$ produces an unphysical result: on a representative synthetic instance, an accumulated state of $F \approx 145\,\mathrm{m}$ gives $1 + \lambda F \approx 30\times$ the base cost, an order of magnitude larger than the $\leq 1.2\times$ ceiling the original model imposed by construction.
+
+We were unable to find a directly usable literature value for $\lambda$ in the units the revised model needs (a pace-decay rate per metre of net elevation gain).
+The exercise-physiology and trail-running literature we surveyed reports either whole-race average pace losses (e.g.\ elite ultra-trail runners slowing 15--20\% by race end) or fatigue accumulated as a function of instantaneous work rate/power rather than cumulative elevation---e.g.\ \citet{jaszczak2024} extend Keller's running model to trail racing with a fatigue state that grows proportionally to power output (rate constant $K = 6\times10^{-5}\,\mathrm{s}^{-1}$, taken from prior work rather than fit to their race data)---not a coefficient tying pace decay to cumulative vertical gain specifically.
+As a rough order-of-magnitude anchor---not a calibrated or cited constant---we take a representative ultra-trail profile ($\sim$10{,}000\,m cumulative $D^+$, e.g.\ UTMB) together with the $\sim$15--20\% reported end-of-race slowdown: $1 + \lambda D^+ \approx 1.175$ at $D^+ = 10\text{,}000$ gives $\lambda \approx 1.75 \times 10^{-5}$.
+Given the absence of a defensible point estimate, we treat $\lambda$ as a swept sensitivity parameter (\texttt{--lambda-sweep} in the solver implementation) over $\{0,\, 1\times10^{-5},\, 1.75\times10^{-5},\, 5\times10^{-5},\, 1\times10^{-4}\}$, centred on the order-of-magnitude anchor above, rather than reporting results at a single unjustified value.
+
+$\rho$ (the downhill-recovery fraction in \cref{eq:psi}) remains a swept sensitivity parameter as before ($\rho \in \{0, 0.25, 0.5, 0.75, 1.0\}$, \texttt{--rho-sweep}): the metabolic-recovery-versus-eccentric-damage trade-off it represents is not settled in the literature we surveyed, so we report sensitivity rather than assert a value.
+$\mu$ (the distance-to-elevation weight, \cref{eq:mu}) is the one fatigue parameter derived rather than swept, since it follows directly from the Minetti curve already used for $C_{ij}$; for the terrain parameters in this study it evaluates to $\mu \approx 0.067$ (equivalently, $\sim$14.9 horizontal metres per vertical-metre-equivalent).}
 
 % ════════════════════════════════════════════════════════════════
 \section{Results}
@@ -1308,6 +1342,11 @@ A.~S. Voloshina, A.~D. Kuo, M.~A. Daley, and D.~P. Ferris.
 G.~Y. Millet, C.~Divert, T.~Banizette, and J.-B. Morin.
 \newblock Changes in running pattern due to fatigue and cognitive load in orienteering.
 \newblock \emph{Journal of Sports Sciences}, 28(2):153--160, 2010.
+
+\bibitem[Jaszczak and P{\l}ociniczak(2024)]{jaszczak2024}
+B.~Jaszczak and {\L}.~P{\l}ociniczak.
+\newblock Optimal strategy for trail running with nutrition and fatigue factors.
+\newblock \emph{arXiv preprint arXiv:2401.02919}, 2024.
 
 \bibitem[Fischetti(1991)]{fischetti1991atsp}
 M.~Fischetti.
