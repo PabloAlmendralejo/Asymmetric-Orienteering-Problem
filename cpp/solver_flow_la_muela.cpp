@@ -1070,8 +1070,12 @@ struct Solver {
     double best_pts = 0.0;
     std::vector<int> best_route;
     int max_cuts = 20;
-    int max_depth = 15;
+    int max_depth = 200;  // raised from 15: x_ij branching (see integrality-check fix) needs far more decisions to fully resolve than y-only branching did
     double time_limit_s = 900.0;
+    // See cpp/solver_flow_torremocha.cpp: a node dropped purely for
+    // exceeding max_depth is unresolved, not proven suboptimal --
+    // proved_optimal must not claim completeness once this fires.
+    bool depth_limit_hit = false;
 
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
@@ -1116,7 +1120,7 @@ struct Solver {
             node_stack.pop();
             process_node(std::move(node), node_stack);
         }
-        proved_optimal = node_stack.empty() && nodes < 10000;
+        proved_optimal = node_stack.empty() && nodes < 10000 && !depth_limit_hit;
         nodes_explored = nodes;
         nodes_unexplored = static_cast<int>(node_stack.size());
         if (proved_optimal) {
@@ -1136,7 +1140,8 @@ struct Solver {
     }
 
     void process_node(BNCNode node, std::stack<BNCNode>& node_stack) {
-        if (node.ub <= best_pts + 1e-6 || node.fixings.size() > max_depth) return;
+        if (node.ub <= best_pts + 1e-6) return;
+        if (node.fixings.size() > max_depth) { depth_limit_hit = true; return; }
 
         // Clone LP and apply fixings
         LPModel lp;

@@ -1171,8 +1171,18 @@ struct Solver {
     double best_pts = 0.0;
     std::vector<int> best_route;
     int max_cuts = 20;
-    int max_depth = 15;
+    int max_depth = 200;  // raised from 15: x_ij branching (see integrality-check fix) needs far more decisions to fully resolve than y-only branching did
     double time_limit_s = 900.0;
+    // Set whenever process_node drops a node purely for exceeding
+    // max_depth (not a valid bound-based prune) -- since branching now
+    // covers x_ij as well as y_i (see the integrality-check fix above),
+    // resolving a node to full integrality can need far more than 15
+    // decisions, so this triggers routinely rather than being a rare
+    // safety valve. A depth-dropped node is UNRESOLVED, not proven
+    // suboptimal, so proved_optimal must not claim completeness once this
+    // has fired -- an emptied queue only means "we stopped looking",
+    // not "nothing better exists".
+    bool depth_limit_hit = false;
 
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
@@ -1217,7 +1227,7 @@ struct Solver {
             node_stack.pop();
             process_node(std::move(node), node_stack);
         }
-        proved_optimal = node_stack.empty() && nodes < 10000;
+        proved_optimal = node_stack.empty() && nodes < 10000 && !depth_limit_hit;
         nodes_explored = nodes;
         nodes_unexplored = static_cast<int>(node_stack.size());
         // Compute best remaining upper bound from unexplored nodes
@@ -1238,7 +1248,8 @@ struct Solver {
     }
 
     void process_node(BNCNode node, std::stack<BNCNode>& node_stack) {
-        if (node.ub <= best_pts + 1e-6 || node.fixings.size() > max_depth) return;
+        if (node.ub <= best_pts + 1e-6) return;
+        if (node.fixings.size() > max_depth) { depth_limit_hit = true; return; }
 
         // Clone LP and apply fixings
         LPModel lp;
