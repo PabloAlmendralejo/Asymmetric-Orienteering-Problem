@@ -83,7 +83,20 @@ def rpts(route, pts):
 
 def compute_cost_matrix(base_cost, slope_x, slope_y, nodes, ds=8,
                         cache_enabled=True):
-    """Build asymmetric cost matrix via anisotropic Dijkstra from each node."""
+    """Build asymmetric cost matrix via anisotropic Dijkstra from each node.
+
+    Returns
+    -------
+    cm : (n, n) ndarray
+        Minetti-weighted asymmetric travel cost matrix (as before).
+    gain_m : (n, n) ndarray
+        Cumulative uphill elevation gain (metres) along the cost-optimal
+        path from node i to node j. Used as phi_plus for the non-linear
+        fatigue model (Sec. 3.6 rework).
+    loss_m : (n, n) ndarray
+        Cumulative downhill elevation loss (metres) along the same path.
+        Used as phi_minus (recovery term) for the non-linear fatigue model.
+    """
     h, w = base_cost.shape
     h_ds, w_ds = h // ds, w // ds
 
@@ -115,25 +128,43 @@ def compute_cost_matrix(base_cost, slope_x, slope_y, nodes, ds=8,
     if cache_enabled and os.path.exists(cache_file):
         with np.load(cache_file) as data:
             cm = data['cm'].copy()
-        print(f"    ✅ Loaded cached cost matrix ({cache_file})")
-        return cm
+            # Backward compat: older caches won't have gain/loss saved.
+            if 'gain' in data and 'loss' in data:
+                gain_m = data['gain'].copy()
+                loss_m = data['loss'].copy()
+                print(f"    ✅ Loaded cached cost matrix ({cache_file})")
+                return cm, gain_m, loss_m
+        print(f"    ⚠️ Cache {cache_file} missing gain/loss, recomputing")
 
     print(f"    DS grid: {w_ds}x{h_ds}, {n} nodes, ds={ds}")
 
     if NUMBA_AVAILABLE:
-        cm = _compute_cost_matrix_numba(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds)
+        cm, gain_m, loss_m = _compute_cost_matrix_numba(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds)
     else:
-        cm = _compute_cost_matrix_python(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds)
+        cm, gain_m, loss_m = _compute_cost_matrix_python(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds)
 
-    np.savez_compressed(cache_file, cm=cm)
+    np.savez_compressed(cache_file, cm=cm, gain=gain_m, loss=loss_m)
     print(f"    💾 Saved cost matrix cache ({cache_file})")
-    return cm
+    return cm, gain_m, loss_m
 
 
 def _compute_cost_matrix_python(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
-    """Pure Python fallback for cost matrix computation."""
+    """Pure Python fallback for cost matrix computation.
+
+    Alongside the Minetti-weighted cost `dist`, this also tracks two
+    parallel accumulators along the *same* shortest-cost tree:
+      - `gain`: cumulative positive elevation gain (uphill only, metres)
+      - `loss`: cumulative positive elevation loss (downhill only, metres)
+    These are exported as phi_plus / phi_minus arc weights for the
+    non-linear (state-dependent, asymmetric) fatigue model. They are
+    accumulated along the cost-optimal path to each node, i.e. they
+    describe the terrain profile of the path Dijkstra actually selects,
+    not an independent optimum.
+    """
     import heapq
     cm = np.full((n, n), np.inf)
+    gain_m = np.zeros((n, n))
+    loss_m = np.zeros((n, n))
     np.fill_diagonal(cm, 0.0)
 
     ndx = [-1, 1, 0, 0, -1, 1, -1, 1]
@@ -144,6 +175,8 @@ def _compute_cost_matrix_python(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
         sx = min(max(dn[i][0], 0), w_ds - 1)
         sy = min(max(dn[i][1], 0), h_ds - 1)
         dist = np.full((h_ds, w_ds), np.inf)
+        gain = np.zeros((h_ds, w_ds))
+        loss = np.zeros((h_ds, w_ds))
         dist[sy, sx] = 0.0
         vis = np.zeros((h_ds, w_ds), dtype=bool)
         pq = [(0.0, sx, sy)]
@@ -163,18 +196,23 @@ def _compute_cost_matrix_python(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
                 if not np.isfinite(bc):
                     continue
                 step_len = nsl[k]
+                # Signed elevation change over this step (metres), from the
+                # same directional gradient used for the Minetti factor.
+                gx = 0.5 * (ds_sx[y, x] + ds_sx[ny_, nx_])
+                gy = 0.5 * (ds_sy[y, x] + ds_sy[ny_, nx_])
+                ml = math.sqrt(ndx[k] ** 2 + ndy[k] ** 2)
+                dir_slope = (gx * ndx[k] + gy * ndy[k]) / ml
+                dz = dir_slope * step_len  # approx elevation delta over the step
                 if bc >= 9.0:
                     nd = d + step_len * 10.0
                 else:
-                    gx = 0.5 * (ds_sx[y, x] + ds_sx[ny_, nx_])
-                    gy = 0.5 * (ds_sy[y, x] + ds_sy[ny_, nx_])
-                    ml = math.sqrt(ndx[k] ** 2 + ndy[k] ** 2)
-                    dir_slope = (gx * ndx[k] + gy * ndy[k]) / ml
                     sf = float(minetti_factor(dir_slope))
                     avg_base = 0.5 * (ds_base[y, x] + bc)
                     nd = d + step_len * avg_base * sf
                 if nd < dist[ny_, nx_]:
                     dist[ny_, nx_] = nd
+                    gain[ny_, nx_] = gain[y, x] + max(dz, 0.0)
+                    loss[ny_, nx_] = loss[y, x] + max(-dz, 0.0)
                     heapq.heappush(pq, (nd, nx_, ny_))
 
         for j in range(n):
@@ -182,10 +220,12 @@ def _compute_cost_matrix_python(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
                 tx = min(max(dn[j][0], 0), w_ds - 1)
                 ty = min(max(dn[j][1], 0), h_ds - 1)
                 cm[i, j] = dist[ty, tx]
+                gain_m[i, j] = gain[ty, tx]
+                loss_m[i, j] = loss[ty, tx]
         if (i + 1) % 10 == 0:
             print(f"    Node {i + 1}/{n}")
 
-    return cm
+    return cm, gain_m, loss_m
 
 
 def _compute_cost_matrix_numba(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
@@ -248,6 +288,8 @@ def _compute_cost_matrix_numba(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
         h, w = base_cost.shape
         INF = 1e18
         dist = np.full((h, w), INF, dtype=np.float64)
+        gain = np.zeros((h, w), dtype=np.float64)  # cumulative uphill metres (cost-optimal path)
+        loss = np.zeros((h, w), dtype=np.float64)  # cumulative downhill metres (cost-optimal path)
         dist[sy, sx] = 0.0
         vis = np.zeros((h, w), dtype=np.bool_)
         MAX_HEAP = h * w * 2
@@ -274,19 +316,22 @@ def _compute_cost_matrix_numba(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
                 if bc != bc:
                     continue
                 step_len = nsl[k]
+                gx = 0.5 * (slope_x[y, x] + slope_x[ny_, nx_])
+                gy = 0.5 * (slope_y[y, x] + slope_y[ny_, nx_])
+                ml = math.sqrt(float(ndx[k]) ** 2 + float(ndy[k]) ** 2)
+                ds = (gx * float(ndx[k]) + gy * float(ndy[k])) / ml
+                dz = ds * step_len  # signed elevation delta over this step (m)
                 if bc >= 9.0:
                     nd = dd + step_len * 10.0
                 else:
-                    gx = 0.5 * (slope_x[y, x] + slope_x[ny_, nx_])
-                    gy = 0.5 * (slope_y[y, x] + slope_y[ny_, nx_])
-                    ml = math.sqrt(float(ndx[k]) ** 2 + float(ndy[k]) ** 2)
-                    ds = (gx * float(ndx[k]) + gy * float(ndy[k])) / ml
                     sf = _minetti_factor_nb(ds)
                     nd = dd + step_len * 0.5 * (base_cost[y, x] + bc) * sf
                 if nd < dist[ny_, nx_]:
                     dist[ny_, nx_] = nd
+                    gain[ny_, nx_] = gain[y, x] + max(dz, 0.0)
+                    loss[ny_, nx_] = loss[y, x] + max(-dz, 0.0)
                     hn = _heap_push(hd, hx, hy, hn, nd, nx_, ny_, MAX_HEAP)
-        return dist
+        return dist, gain, loss
 
     # JIT warmup
     print("    JIT compiling (first run only)...")
@@ -295,18 +340,22 @@ def _compute_cost_matrix_numba(ds_base, ds_sx, ds_sy, dn, n, h_ds, w_ds):
     print(f"    JIT ready in {time_module.time() - t0:.1f}s")
 
     cm = np.full((n, n), np.inf)
+    gain_m = np.zeros((n, n))
+    loss_m = np.zeros((n, n))
     np.fill_diagonal(cm, 0.0)
     for i in range(n):
         t0 = time_module.time()
         sx = min(max(dn[i][0], 0), w_ds - 1)
         sy = min(max(dn[i][1], 0), h_ds - 1)
-        dist = _dijkstra_nb(ds_base, ds_sx, ds_sy, sx, sy)
+        dist, gain, loss = _dijkstra_nb(ds_base, ds_sx, ds_sy, sx, sy)
         for j in range(n):
             if i != j:
                 tx = min(max(dn[j][0], 0), w_ds - 1)
                 ty = min(max(dn[j][1], 0), h_ds - 1)
                 cm[i, j] = dist[ty, tx]
+                gain_m[i, j] = gain[ty, tx]
+                loss_m[i, j] = loss[ty, tx]
         elapsed = time_module.time() - t0
         if (i + 1) % 10 == 0 or i == 0:
             print(f"    Node {i + 1}/{n} ({elapsed:.2f}s, ETA {elapsed * (n - i - 1):.0f}s)")
-    return cm
+    return cm, gain_m, loss_m

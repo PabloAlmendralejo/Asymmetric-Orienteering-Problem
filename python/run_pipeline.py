@@ -153,7 +153,7 @@ def run_main_route(cfg, terrain):
     # Cost matrix
     print(f"\n[5/7] Cost matrix ({len(nodes)} nodes, DS={cfg['downsample']})...")
     t0 = time.time()
-    cm = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'])
+    cm, gain_m, loss_m = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'])
     tm = time.time() - t0
     print(f"  Done in {tm:.1f}s")
 
@@ -196,7 +196,8 @@ def run_main_route(cfg, terrain):
     return {
         'valid': valid, 'base_cost': base_cost, 'sx': sx, 'sy': sy,
         'veg_grid': veg_grid, 'hh': hh, 'ctrls': ctrls,
-        'route': route, 'cm': cm, 'pa': pa, 'nodes': nodes,
+        'route': route, 'cm': cm, 'gain_m': gain_m, 'loss_m': loss_m,
+        'pa': pa, 'nodes': nodes,
     }
 
 
@@ -236,18 +237,30 @@ def export_jsons(cfg, terrain, pipeline_result):
             nodes.append((cx, cy)); pa.append(float(pts))
         pa = np.array(pa)
 
-        cm = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'])
+        cm, gain_m, loss_m = compute_cost_matrix(base_cost, sx, sy, nodes, cfg['downsample'])
         fm = np.isfinite(cm)
         if (~fm).sum() - len(nodes) > 0:
             cm[~fm] = cm[fm].max() * 3
+            # Arcs made artificially "reachable" by the 3x penalty carry no
+            # real terrain profile; zero out gain/loss so they don't bias
+            # the fatigue bound computed in C++.
+            gain_m[~fm] = 0.0
+            loss_m[~fm] = 0.0
 
         filename = f"op_input_{dist_name}.json"
         op_data = {
             "cm": cm.tolist(),
+            "gain": gain_m.tolist(),
+            "loss": loss_m.tolist(),
             "pts": pa.tolist(),
             "bud_eff": float(bud_eff),
             "bud_raw": float(bud_raw),
             "fatigue_rate": float(cfg['fatigue_rate']),
+            # rho: fraction of downhill elevation loss that offsets
+            # accumulated fatigue (0 = no recovery, 1 = full recovery).
+            # Treated as a sensitivity parameter, swept at solve time in
+            # the C++ solver rather than fixed here.
+            "rho_default": 0.5,
         }
         with open(filename, 'w') as f:
             json.dump(op_data, f, indent=2)

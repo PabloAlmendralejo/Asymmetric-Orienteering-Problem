@@ -17,6 +17,7 @@
 #include <random>
 #include <iomanip>
 #include <set>
+#include <array>
 #include "interfaces/highs_c_api.h"
 #include "lp_data/HConst.h"
 //  #include "glpk.h"
@@ -31,8 +32,11 @@ static std::string read_file(const std::string& path) {
 
 struct Input {
     std::vector<std::vector<double>> cm;
+    std::vector<std::vector<double>> gain;   // phi_plus: cumulative uphill metres per arc (i->j)
+    std::vector<std::vector<double>> loss;   // phi_minus: cumulative downhill metres per arc (i->j)
     std::vector<double> pts;
     double bud_eff = 0.0, bud_raw = 0.0, fatigue_rate = 0.0;
+    double rho = 0.5;  // recovery fraction on downhill; sensitivity parameter, see main()
 };
 
 static Input parse_input(const std::string& json_str) {
@@ -81,19 +85,41 @@ static Input parse_input(const std::string& json_str) {
         return m;
     };
     
-    auto find_key = [&](const std::string& key) {
+    auto find_key_opt = [&](const std::string& key) -> bool {
         std::string key_str = "\"" + key + "\":";
-        size_t pos = json_str.find(key_str, i);
-        if (pos == std::string::npos) throw std::runtime_error("Missing key: " + key);
+        size_t pos = json_str.find(key_str, 0);
+        if (pos == std::string::npos) return false;
         i = pos + key_str.size();
+        return true;
     };
-    
+    auto find_key = [&](const std::string& key) {
+        if (!find_key_opt(key)) throw std::runtime_error("Missing key: " + key);
+    };
+
     find_key("cm"); inp.cm = parse_array2d(i);
     find_key("pts"); inp.pts = parse_array1d(i);
     find_key("bud_eff"); i = skip_ws(i); inp.bud_eff = parse_number(i);
     find_key("bud_raw"); i = skip_ws(i); inp.bud_raw = parse_number(i);
     find_key("fatigue_rate"); i = skip_ws(i); inp.fatigue_rate = parse_number(i);
-    
+
+    const int n = static_cast<int>(inp.pts.size());
+    if (find_key_opt("gain")) {
+        inp.gain = parse_array2d(i);
+    } else {
+        std::cerr << "  [warn] input has no 'gain' matrix (old format) -- "
+                     "asymmetric fatigue model disabled, phi_plus=0\n";
+        inp.gain.assign(n, std::vector<double>(n, 0.0));
+    }
+    if (find_key_opt("loss")) {
+        inp.loss = parse_array2d(i);
+    } else {
+        std::cerr << "  [warn] input has no 'loss' matrix (old format) -- phi_minus=0\n";
+        inp.loss.assign(n, std::vector<double>(n, 0.0));
+    }
+    if (find_key_opt("rho_default")) {
+        i = skip_ws(i); inp.rho = parse_number(i);
+    }
+
     return inp;
 }
 
@@ -122,6 +148,81 @@ static double rcost_fatigue(const std::vector<std::vector<double>>& cm, const st
     return total;
 }
 
+// ── Non-linear asymmetric fatigue model (Sec 3.6 rework) ──────────────
+// psi_ij = phi_plus_ij - rho * phi_minus_ij: net fatigue contribution of
+// arc (i,j), where phi_plus/phi_minus are cumulative uphill/downhill
+// metres along the cost-optimal path (see python/core/pathfinding.py).
+// rho in [0,1] is the downhill-recovery fraction, treated as a sensitivity
+// parameter (see rho sweep in main()), not calibrated from a single value.
+static inline double psi_arc(const Input& inp, int i, int j, double rho) {
+    return inp.gain[i][j] - rho * inp.loss[i][j];
+}
+
+// Which arcs are structurally admissible for the fatigue-bound graph.
+// Mirrors the base-cost pre-filter in LPModel::build() but does NOT use
+// the fatigue-aware filter, since that filter itself depends on Ghat --
+// this would be circular. Using only the cost-only filter here is
+// conservative (a superset of true survivors), which keeps Ghat valid.
+static inline bool arc_survives_base(const Input& inp, int i, int j) {
+    if (i == j) return false;
+    if (!std::isfinite(inp.cm[i][j])) return false;
+    if (!std::isfinite(inp.cm[j][0])) return false;
+    if (inp.cm[i][j] + inp.cm[j][0] > inp.bud_raw) return false;
+    if (inp.cm[0][i] + inp.cm[i][j] + inp.cm[j][0] > inp.bud_raw) return false;
+    return true;
+}
+
+// Ghat_i: valid upper bound on the (unclipped) cumulative fatigue state
+// G_i reachable at node i by any budget-admissible route from the depot.
+// Bellman-Ford relaxation in the (max,+) semiring, capped at n-1 rounds so
+// it stays well-defined even with positive-weight cycles in the psi graph
+// (see solver_flow_torremocha.cpp for the full derivation/comment).
+static std::vector<double> compute_fatigue_bounds(const Input& inp, double rho) {
+    const int n = static_cast<int>(inp.pts.size());
+    const double NEG_INF = -1e30;
+    std::vector<double> g(n, NEG_INF);
+    g[0] = 0.0;
+
+    std::vector<std::array<double,3>> arcs;
+    arcs.reserve(n * n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (arc_survives_base(inp, i, j))
+                arcs.push_back({double(i), double(j), psi_arc(inp, i, j, rho)});
+
+    for (int round = 0; round < n - 1; ++round) {
+        bool changed = false;
+        for (const auto& a : arcs) {
+            int i = int(a[0]), j = int(a[1]);
+            double psi = a[2];
+            if (g[i] <= NEG_INF / 2) continue;
+            double cand = g[i] + psi;
+            if (cand > g[j] + 1e-12) { g[j] = cand; changed = true; }
+        }
+        if (!changed) break;
+    }
+    for (int i = 0; i < n; ++i) g[i] = std::max(g[i], 0.0);
+    return g;
+}
+
+// Exact (clipped, sequence-dependent) fatigue-adjusted route cost, used to
+// validate a concrete candidate route (SA output or extracted B&C integer
+// solution): F_0=0, F_{l+1}=max(0, F_l + phi_plus - rho*phi_minus),
+// cost_leg = C_leg * (1 + fatigue_rate * F_l).
+static double rcost_fatigue_asym(const Input& inp, const std::vector<int>& route, double rho) {
+    if (route.empty()) return inp.cm[0][0];
+    std::vector<int> seq = {0};
+    seq.insert(seq.end(), route.begin(), route.end());
+    seq.push_back(0);
+    double total = 0.0, F = 0.0;
+    for (size_t k = 0; k + 1 < seq.size(); ++k) {
+        int a = seq[k], b = seq[k + 1];
+        total += inp.cm[a][b] * (1.0 + inp.fatigue_rate * F);
+        F = std::max(0.0, F + psi_arc(inp, a, b, rho));
+    }
+    return total;
+}
+
 #include "Highs.h"  // replace #include "glpk.h"
 
 struct LPModel {
@@ -129,7 +230,9 @@ struct LPModel {
     Highs* highs = nullptr;
     std::vector<std::vector<int>> x_col;
     std::vector<int> y_col;
-    std::vector<std::vector<int>> f_col;   // flow variables (cumulative time)
+    std::vector<std::vector<int>> f_col;   // flow variables (cumulative time) -- legacy, kept for A-B comparison
+    std::vector<std::vector<int>> g_col;   // flow variables (cumulative asymmetric fatigue state G_i)
+    std::vector<double> Ghat;              // per-node upper bound on G_i, from compute_fatigue_bounds()
     std::vector<double> col_ub_cache;  // cached upper bounds per column
     std::vector<double> sol_cache;      // cached primal solution after each solve()
     int n_cols_base = 0;
@@ -185,6 +288,7 @@ struct LPModel {
         x_col.assign(n, std::vector<int>(n, -1));
         y_col.resize(n, -1);
         f_col.assign(n, std::vector<int>(n, -1));
+        g_col.assign(n, std::vector<int>(n, -1));
 
         // x[i][j] ΓÇö pre-fix structurally infeasible arcs (base cost + fatigue-aware)
         for (int i = 0; i < n; ++i)
@@ -194,11 +298,10 @@ struct LPModel {
                                   inp.cm[i][j] + inp.cm[j][0] > inp.bud_raw ||
                                   inp.cm[0][i] + inp.cm[i][j] + inp.cm[j][0] > inp.bud_raw;
                 if (!infeasible && inp.fatigue_rate > 0) {
-                    double t_i = inp.cm[0][i];
-                    double t_j = t_i + inp.cm[i][j];
-                    double fat_cost = inp.cm[0][i]
-                                    + inp.cm[i][j] * (1.0 + inp.fatigue_rate * t_i / inp.bud_raw)
-                                    + inp.cm[j][0] * (1.0 + inp.fatigue_rate * t_j / inp.bud_raw);
+                    // Corrected (clipped, asymmetric) model on the direct
+                    // 0->i->j->0 route, replacing the old linear
+                    // 1+lambda*t/B pre-filter test.
+                    double fat_cost = rcost_fatigue_asym(inp, {i, j}, inp.rho);
                     if (fat_cost > inp.bud_raw) infeasible = true;
                 }
                 x_col[i][j] = add_col(0.0, infeasible ? 0.0 : 1.0);
@@ -216,10 +319,26 @@ struct LPModel {
                 f_col[i][j] = add_col(0.0, inp.bud_raw);
             }
 
+        // Ghat_i bound (Bellman-Ford, max-plus, n-1 rounds) -- see
+        // compute_fatigue_bounds() above build().
+        Ghat = compute_fatigue_bounds(inp, inp.rho);
+
+        // g[i][j] -- asymmetric fatigue-flow variables, only on surviving arcs
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                if (x_col[i][j] < 0) continue;
+                g_col[i][j] = add_col(0.0, Ghat[i]);
+            }
+
         add_flow_conservation();
         add_time_flow_coupling(inp.cm, inp.bud_raw);
         add_time_flow_propagation(inp.cm, inp.bud_raw);
-        add_fatigue_budget_flow(inp.cm, inp.bud_raw, inp.fatigue_rate);
+        // NOTE: add_fatigue_budget_flow (old, linear-in-time model) is
+        // replaced by the asymmetric-state budget below. Kept defined
+        // further down for A/B comparison if needed, just not called.
+        add_fatigue_flow_coupling();
+        add_fatigue_flow_propagation(inp, inp.rho);
+        add_fatigue_budget_asym(inp.cm, inp.bud_raw, inp.fatigue_rate);
 
         n_rows_base = Highs_getNumRow(highs);
     }
@@ -231,6 +350,8 @@ struct LPModel {
         x_col           = other.x_col;
         y_col           = other.y_col;
         f_col           = other.f_col;
+        g_col           = other.g_col;
+        Ghat            = other.Ghat;
         col_ub_cache    = other.col_ub_cache;
         n_rows_base     = other.n_rows_base;
         // added_secs starts empty ΓÇö each cloned node tracks its own cuts
@@ -332,6 +453,54 @@ struct LPModel {
                 if (f_col[i][j] >= 0) {
                     cols.push_back(f_col[i][j]);
                     coeffs.push_back((fatigue_rate / bud_raw) * cm[i][j]);
+                }
+            }
+        add_row(-1e30, bud_raw, cols, coeffs);
+    }
+
+    // -- Asymmetric fatigue-state model (replaces the linear one above) --
+
+    void add_fatigue_flow_coupling() {
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                if (g_col[i][j] < 0) continue;
+                add_row(-1e30, 0.0,
+                        {g_col[i][j], x_col[i][j]},
+                        {1.0,         -Ghat[i]});
+            }
+    }
+
+    void add_fatigue_flow_propagation(const Input& inp, double rho) {
+        for (int j = 1; j < n; ++j) {
+            std::vector<int> cols; std::vector<double> coeffs;
+            for (int i = 0; i < n; ++i) {
+                if (g_col[i][j] >= 0) { cols.push_back(g_col[i][j]); coeffs.push_back(1.0); }
+                if (x_col[i][j] >= 0) { cols.push_back(x_col[i][j]); coeffs.push_back(psi_arc(inp, i, j, rho)); }
+            }
+            for (int k = 0; k < n; ++k) {
+                if (g_col[j][k] >= 0) { cols.push_back(g_col[j][k]); coeffs.push_back(-1.0); }
+            }
+            if (!cols.empty())
+                add_row(0.0, 0.0, cols, coeffs);
+        }
+        for (int j = 0; j < n; ++j) {
+            if (g_col[0][j] >= 0)
+                fix_col(g_col[0][j], 0.0);
+        }
+    }
+
+    void add_fatigue_budget_asym(const std::vector<std::vector<double>>& cm,
+                                  double bud_raw, double fatigue_rate) {
+        std::vector<int> cols; std::vector<double> coeffs;
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) {
+                if (x_col[i][j] >= 0) {
+                    cols.push_back(x_col[i][j]);
+                    coeffs.push_back(cm[i][j]);
+                }
+                if (g_col[i][j] >= 0) {
+                    cols.push_back(g_col[i][j]);
+                    coeffs.push_back(fatigue_rate * cm[i][j]);
                 }
             }
         add_row(-1e30, bud_raw, cols, coeffs);
@@ -644,7 +813,8 @@ std::vector<int> extract_route(const LPModel& model, double eps = 0.5) {
 }
 
 bool is_feasible_route(const Input& inp, const std::vector<int>& route) {
-    return rcost_fatigue(inp.cm, route, inp.bud_raw, inp.fatigue_rate) <= inp.bud_raw;
+    // Corrected model: clipped, asymmetric, sequence-dependent fatigue.
+    return rcost_fatigue_asym(inp, route, inp.rho) <= inp.bud_raw;
 }
 
 // ΓöÇΓöÇ Greedy heuristic ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
@@ -784,7 +954,7 @@ std::vector<int> solve_sa(const Input& inp, int n_iterations = 80000,
 
         double nc = rcost(inp.cm, new_route);
         if (nc > inp.bud_eff) continue;
-        if (rcost_fatigue(inp.cm, new_route, inp.bud_raw, inp.fatigue_rate) > inp.bud_raw) continue;
+        if (rcost_fatigue_asym(inp, new_route, inp.rho) > inp.bud_raw) continue;
 
         double ns    = rpts(inp.pts, new_route);
         double delta = ns - cur_score;
@@ -799,7 +969,7 @@ std::vector<int> solve_sa(const Input& inp, int n_iterations = 80000,
 
     // repair: drop nodes that violate fatigue budget
     while (!best_route.empty() &&
-           rcost_fatigue(inp.cm, best_route, inp.bud_raw, inp.fatigue_rate) > inp.bud_raw) {
+           rcost_fatigue_asym(inp, best_route, inp.rho) > inp.bud_raw) {
         int worst = static_cast<int>(std::min_element(best_route.begin(), best_route.end(),
             [&](int a, int b){ return inp.pts[a] < inp.pts[b]; }) - best_route.begin());
         best_route.erase(best_route.begin() + worst);
@@ -976,16 +1146,20 @@ struct Solver {
 
 // ΓöÇΓöÇ Main ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-static void run_map(const std::string& in_path, const std::string& out_path) {
+static void run_map(const std::string& in_path, const std::string& out_path,
+                     double rho_override = -1.0) {
     std::cerr << "\n=== " << in_path << " ===\n";
     Input inp = parse_input(read_file(in_path));
+    if (rho_override >= 0.0) inp.rho = rho_override;
+    std::cerr << "  rho = " << inp.rho << "\n";
 
     auto t_sa = std::chrono::steady_clock::now();
     auto sa_route = solve_sa_iterated(inp);
     double sa_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_sa).count();
     double sa_pts     = rpts(inp.pts, sa_route);
     double sa_base    = rcost(inp.cm, sa_route);
-    double sa_fatigue = rcost_fatigue(inp.cm, sa_route, inp.bud_raw, inp.fatigue_rate);
+    double sa_fatigue        = rcost_fatigue_asym(inp, sa_route, inp.rho);
+    double sa_fatigue_legacy = rcost_fatigue(inp.cm, sa_route, inp.bud_raw, inp.fatigue_rate);
     std::cerr << "SA: " << sa_pts << " pts (" << sa_route.size() << " nodes) in " << sa_elapsed << "s\n";
 
     auto t_bnc = std::chrono::steady_clock::now();
@@ -993,14 +1167,17 @@ static void run_map(const std::string& in_path, const std::string& out_path) {
     solver.solve(sa_pts, sa_route);
     double bnc_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_bnc).count();
     double bnc_base    = rcost(inp.cm, solver.best_route);
-    double bnc_fatigue = rcost_fatigue(inp.cm, solver.best_route, inp.bud_raw, inp.fatigue_rate);
+    double bnc_fatigue        = rcost_fatigue_asym(inp, solver.best_route, inp.rho);
+    double bnc_fatigue_legacy = rcost_fatigue(inp.cm, solver.best_route, inp.bud_raw, inp.fatigue_rate);
     std::cerr << "B&C(SA): " << solver.best_pts << " pts (" << solver.best_route.size() << " nodes) in " << bnc_elapsed << "s\n";
 
     std::ofstream out(out_path);
     out << "{\n";
+    out << "  \"rho\": " << inp.rho << ",\n";
     out << "  \"sa\": {\"pts\": " << sa_pts << ", \"nodes\": " << sa_route.size()
         << ", \"elapsed_s\": " << sa_elapsed << ", \"base_cost\": " << sa_base
-        << ", \"fatigue_cost\": " << sa_fatigue << ", \"route\": [";
+        << ", \"fatigue_cost\": " << sa_fatigue
+        << ", \"fatigue_cost_legacy\": " << sa_fatigue_legacy << ", \"route\": [";
     for (size_t i = 0; i < sa_route.size(); ++i) { if (i) out << ", "; out << sa_route[i]; }
     out << "]},\n";
     out << "  \"bnc_sa\": {\"pts\": " << solver.best_pts << ", \"nodes\": " << solver.best_route.size()
@@ -1011,7 +1188,8 @@ static void run_map(const std::string& in_path, const std::string& out_path) {
         << ", \"nodes_explored\": " << solver.nodes_explored
         << ", \"nodes_unexplored\": " << solver.nodes_unexplored
         << ", \"base_cost\": " << bnc_base
-        << ", \"fatigue_cost\": " << bnc_fatigue << ", \"route\": [";
+        << ", \"fatigue_cost\": " << bnc_fatigue
+        << ", \"fatigue_cost_legacy\": " << bnc_fatigue_legacy << ", \"route\": [";
     for (size_t i = 0; i < solver.best_route.size(); ++i) { if (i) out << ", "; out << solver.best_route[i]; }
     out << "]}\n";
     out << "}\n";
@@ -1026,7 +1204,13 @@ struct MapResult {
     double gap_pct;
 };
 
-int main() {
+static const std::vector<double> RHO_SWEEP_VALUES = {0.0, 0.25, 0.5, 0.75, 1.0};
+
+int main(int argc, char** argv) {
+    bool rho_sweep = false;
+    for (int a = 1; a < argc; ++a)
+        if (std::string(argv[a]) == "--rho-sweep") rho_sweep = true;
+
     const std::vector<std::pair<std::string,std::string>> maps = {
         {"op_input_standard.json",     "op_output_standard.json"},
         {"op_input_clustered.json",     "op_output_clustered.json"},
@@ -1037,6 +1221,22 @@ int main() {
         {"op_input_mixed_density.json", "op_output_mixed_density.json"},
 
     };
+
+    if (rho_sweep) {
+        for (const auto& [in, out] : maps) {
+            for (double rho : RHO_SWEEP_VALUES) {
+                std::string suffix = "_rho" + std::to_string(rho).substr(0, 4);
+                std::string out_rho = out.substr(0, out.size() - 5) + suffix + ".json";
+                try { run_map(in, out_rho, rho); }
+                catch (const std::exception& e) {
+                    std::cerr << "Error on " << in << " (rho=" << rho << "): " << e.what() << '\n';
+                }
+            }
+        }
+        std::cerr << "\nrho sweep done: " << maps.size() << " maps x "
+                   << RHO_SWEEP_VALUES.size() << " rho values.\n";
+        return 0;
+    }
 
     // Track whether B&C hit the time limit per map via a flag set in run_map
     // We re-read the output JSON to extract results for the summary table.
