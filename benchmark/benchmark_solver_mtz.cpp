@@ -428,13 +428,15 @@ struct LPModel {
             }
     }
 
+    // M_ij must satisfy M_ij >= Ghat[i] + psi_ij so the row goes slack when
+    // x_ij=0; use max(psi_ij,0) since psi_ij can exceed rho*phi_minus_ij.
     void add_fatigue_state_propagation(const Input& inp, double rho) {
         for (int i = 0; i < n; ++i)
             for (int j = 1; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
                 if (get_col_ub(x_col[i][j]) < 0.5) continue;
                 double psi = psi_arc(inp, i, j, rho);
-                double M_ij = Ghat[i] + rho * inp.loss[i][j];
+                double M_ij = Ghat[i] + std::max(psi, 0.0);
                 add_row(psi - M_ij, 1e30,
                         {G_col[j], G_col[i], x_col[i][j]},
                         {1.0,      -1.0,     -M_ij});
@@ -719,11 +721,15 @@ int find_and_add_cover_cuts(LPModel& lp, const Input& inp, int max_covers = 3) {
             if (val < 1e-6) continue;
             double w = inp.cm[i][j];
             if (!std::isfinite(w) || w <= 0) continue;
-            // Fatigue-aware weight: minimum possible fatigue cost of this arc
-            if (inp.fatigue_rate > 0 && i > 0
-                && std::isfinite(inp.cm[0][i]) && inp.cm[0][i] > 0) {
-                w *= (1.0 + inp.fatigue_rate * inp.cm[0][i] / inp.bud_raw);
-            }
+            // No fatigue-aware tightening here (unlike the flow solvers'
+            // cover cuts, which can use Glow[i]): this old multiplier used
+            // cm[0][i]/bud_raw, a time-based proxy left over from the
+            // pre-rework linear model that no longer bounds anything valid
+            // now that fatigue is driven by elevation gain/loss, not
+            // elapsed cost -- it could overestimate the true minimum and
+            // produce invalid cuts. Plain base cost (a trivially valid
+            // lower bound, since C^f_ij >= C_ij always) matches what
+            // cpp/solver_mtz_torremocha.cpp already does.
             arcs.push_back({lp.x_col[i][j], w, val});
         }
 

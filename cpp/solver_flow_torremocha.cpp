@@ -228,6 +228,52 @@ static std::vector<double> compute_fatigue_bounds(const Input& inp, double rho) 
     return g;
 }
 
+// Ǧ_i (lower): valid LOWER bound on the (unclipped) cumulative fatigue
+// state G_i reachable at node i. Needed because psi_ij can be negative
+// (net downhill recovery) -- see add_fatigue_flow_coupling for why g_col
+// must be allowed to go below 0 for this to be a *sound* relaxation
+// (forcing g_col >= 0 unconditionally makes flow conservation infeasible
+// for the true state whenever a route runs net-downhill, which used to
+// force spurious upstream inflation of g on unrelated arcs).
+//
+// Same (max,+)-style Bellman-Ford construction as compute_fatigue_bounds,
+// but minimising instead of maximising, still capped at n-1 rounds so it
+// stays a valid bound (superset-of-simple-paths argument) regardless of
+// the psi graph's cycle signs. No clipping at the end: unlike Ĝ_i (where
+// clipping a negative upper bound up to 0 is still a *valid*, just looser,
+// upper bound), clipping a positive lower bound down to 0 would also be
+// valid but throwing away real tightness for no correctness benefit, so
+// we only fall back to 0 for genuinely-unreached nodes.
+static std::vector<double> compute_fatigue_lower_bounds(const Input& inp, double rho) {
+    const int n = static_cast<int>(inp.pts.size());
+    const double POS_INF = 1e30;
+    std::vector<double> g(n, POS_INF);
+    g[0] = 0.0;
+
+    std::vector<std::array<double,3>> arcs;
+    arcs.reserve(n * n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (arc_survives_base(inp, i, j))
+                arcs.push_back({double(i), double(j), psi_arc(inp, i, j, rho)});
+
+    for (int round = 0; round < n - 1; ++round) {
+        bool changed = false;
+        for (const auto& a : arcs) {
+            int i = int(a[0]), j = int(a[1]);
+            double psi = a[2];
+            if (g[i] >= POS_INF / 2) continue;  // i not yet reachable
+            double cand = g[i] + psi;
+            if (cand < g[j] - 1e-12) { g[j] = cand; changed = true; }
+        }
+        if (!changed) break;
+    }
+
+    for (int i = 0; i < n; ++i)
+        if (g[i] >= POS_INF / 2) g[i] = 0.0;  // unreached -- fall back to 0
+    return g;
+}
+
 // Exact (clipped, sequence-dependent) fatigue-adjusted route cost, used to
 // validate a *concrete* candidate route (SA output or extracted B&C
 // integer solution). Unlike Ĝ_i above (a conservative LP bound), this
@@ -259,6 +305,7 @@ struct LPModel {
     std::vector<std::vector<int>> f_col;   // flow variables (cumulative time) -- legacy, kept for rcost_fatigue-style checks / A-B comparison
     std::vector<std::vector<int>> g_col;   // flow variables (cumulative asymmetric fatigue state G_i)
     std::vector<double> Ghat;              // per-node upper bound on G_i, from compute_fatigue_bounds()
+    std::vector<double> Glow;              // per-node lower bound on G_i, from compute_fatigue_lower_bounds()
     std::vector<double> col_ub_cache;
     std::vector<double> sol_cache;      // cached primal solution after each solve()
     int n_cols_base = 0;
@@ -345,15 +392,20 @@ struct LPModel {
                 f_col[i][j] = add_col(0.0, inp.bud_raw);
             }
 
-        // Ĝ_i bound (Bellman-Ford, max-plus, n-1 rounds) -- see
-        // compute_fatigue_bounds() above build().
+        // Ĝ_i / Ǧ_i bounds (Bellman-Ford, max-plus / min-plus, n-1 rounds)
+        // -- see compute_fatigue_bounds() / compute_fatigue_lower_bounds()
+        // above build().
         Ghat = compute_fatigue_bounds(inp, inp.rho);
+        Glow = compute_fatigue_lower_bounds(inp, inp.rho);
 
-        // g[i][j] -- asymmetric fatigue-flow variables, only on surviving arcs
+        // g[i][j] -- asymmetric fatigue-flow variables, only on surviving
+        // arcs. Lower bound is Glow[i] (not 0): psi_ij can be negative, so
+        // the true unclipped G_i reachable at a node can itself be
+        // negative on a net-downhill prefix -- see add_fatigue_flow_coupling.
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
-                g_col[i][j] = add_col(0.0, Ghat[i]);
+                g_col[i][j] = add_col(Glow[i], Ghat[i]);
             }
 
         add_flow_conservation();
@@ -378,6 +430,7 @@ struct LPModel {
         f_col           = other.f_col;
         g_col           = other.g_col;
         Ghat            = other.Ghat;
+        Glow            = other.Glow;
         col_ub_cache    = other.col_ub_cache;
         n_rows_base     = other.n_rows_base;
         // added_secs starts empty ΓÇö each cloned node tracks its own cuts
@@ -486,7 +539,13 @@ struct LPModel {
 
     // ── Asymmetric fatigue-state model (replaces the linear one above) ──
 
-    // g_ij <= Ghat[i] * x_ij  (flow-arc coupling, same pattern as time flow)
+    // g_ij <= Ghat[i]*x_ij and g_ij >= Glow[i]*x_ij (flow-arc coupling).
+    // Both directions are needed (unlike the time-flow coupling, which only
+    // needs an upper bound since cm>=0 pins unused-arc f to exactly 0 via
+    // the column's own >=0 lower bound): psi_ij can be negative, so g_col's
+    // column bounds are [Glow[i], Ghat[i]], and without the lower-coupling
+    // row an unused arc (x_ij=0) could sit anywhere in that whole range
+    // instead of being pinned to 0.
     void add_fatigue_flow_coupling() {
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
@@ -494,6 +553,9 @@ struct LPModel {
                 add_row(-1e30, 0.0,
                         {g_col[i][j], x_col[i][j]},
                         {1.0,         -Ghat[i]});
+                add_row(0.0, 1e30,
+                        {g_col[i][j], x_col[i][j]},
+                        {1.0,         -Glow[i]});
             }
     }
 
@@ -520,15 +582,18 @@ struct LPModel {
     }
 
     // Budget: sum C_ij x_ij + fatigue_rate * sum C_ij * g_ij <= B.
-    // g_ij carries (an LP relaxation of) the *unclipped* conservative state
-    // G_i, not the true clipped F_i -- this is intentional: G_i >= F_i
-    // always (Skorokhod reflection argument), so this constraint is always
-    // at least as tight as the true one, i.e. it never admits a route that
-    // is actually infeasible under the true clipped model. It can in
-    // principle reject some routes that would be feasible under the true
-    // model (conservative), which is the price paid for staying a clean
-    // linear MILP constraint instead of needing an extra binary per node
-    // for the max(0, ·) clip.
+    // g_ij carries (an LP relaxation of) the *unclipped* running state G_i,
+    // not the true clipped F_i -- this is intentional: F_i >= G_i always
+    // (by induction: F_0=G_0=0, and if F_i>=G_i then F_{i+1}=max(0,F_i+psi)
+    // >= F_i+psi >= G_i+psi = G_{i+1}, since max(0,x)>=x). So the true cost
+    // C_ij*(1+fatigue_rate*F_i) is always >= what this constraint charges,
+    // i.e. this constraint never REJECTS a route that is actually feasible
+    // under the true clipped model (it's a valid relaxation, at worst
+    // *admitting* something that needs re-checking -- which is exactly what
+    // rcost_fatigue_asym does for any concrete candidate route). The price
+    // paid for staying a clean linear MILP constraint (no extra binary per
+    // node for the max(0,.) clip) is that this bound isn't tight, not that
+    // it's unsound.
     void add_fatigue_budget_asym(const std::vector<std::vector<double>>& cm,
                                   double bud_raw, double fatigue_rate) {
         std::vector<int> cols; std::vector<double> coeffs;

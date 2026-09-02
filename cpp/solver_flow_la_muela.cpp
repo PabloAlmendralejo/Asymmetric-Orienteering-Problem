@@ -205,6 +205,42 @@ static std::vector<double> compute_fatigue_bounds(const Input& inp, double rho) 
     return g;
 }
 
+// Ghat_low_i: valid LOWER bound on the (unclipped) cumulative fatigue
+// state G_i. Needed because psi_ij can be negative (net downhill
+// recovery) -- see add_fatigue_flow_coupling for why g_col must be
+// allowed below 0 for this to be a sound relaxation (see
+// solver_flow_torremocha.cpp for the full derivation/comment). Same
+// construction as compute_fatigue_bounds but minimising, capped at n-1
+// rounds; no clipping at the end (only unreached nodes fall back to 0).
+static std::vector<double> compute_fatigue_lower_bounds(const Input& inp, double rho) {
+    const int n = static_cast<int>(inp.pts.size());
+    const double POS_INF = 1e30;
+    std::vector<double> g(n, POS_INF);
+    g[0] = 0.0;
+
+    std::vector<std::array<double,3>> arcs;
+    arcs.reserve(n * n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (arc_survives_base(inp, i, j))
+                arcs.push_back({double(i), double(j), psi_arc(inp, i, j, rho)});
+
+    for (int round = 0; round < n - 1; ++round) {
+        bool changed = false;
+        for (const auto& a : arcs) {
+            int i = int(a[0]), j = int(a[1]);
+            double psi = a[2];
+            if (g[i] >= POS_INF / 2) continue;
+            double cand = g[i] + psi;
+            if (cand < g[j] - 1e-12) { g[j] = cand; changed = true; }
+        }
+        if (!changed) break;
+    }
+    for (int i = 0; i < n; ++i)
+        if (g[i] >= POS_INF / 2) g[i] = 0.0;
+    return g;
+}
+
 // Exact (clipped, sequence-dependent) fatigue-adjusted route cost, used to
 // validate a concrete candidate route (SA output or extracted B&C integer
 // solution): F_0=0, F_{l+1}=max(0, F_l + phi_plus - rho*phi_minus),
@@ -233,6 +269,7 @@ struct LPModel {
     std::vector<std::vector<int>> f_col;   // flow variables (cumulative time) -- legacy, kept for A-B comparison
     std::vector<std::vector<int>> g_col;   // flow variables (cumulative asymmetric fatigue state G_i)
     std::vector<double> Ghat;              // per-node upper bound on G_i, from compute_fatigue_bounds()
+    std::vector<double> Glow;              // per-node lower bound on G_i, from compute_fatigue_lower_bounds()
     std::vector<double> col_ub_cache;  // cached upper bounds per column
     std::vector<double> sol_cache;      // cached primal solution after each solve()
     int n_cols_base = 0;
@@ -319,15 +356,18 @@ struct LPModel {
                 f_col[i][j] = add_col(0.0, inp.bud_raw);
             }
 
-        // Ghat_i bound (Bellman-Ford, max-plus, n-1 rounds) -- see
-        // compute_fatigue_bounds() above build().
+        // Ghat_i / Glow_i bounds (Bellman-Ford, max-plus / min-plus, n-1
+        // rounds) -- see compute_fatigue_bounds() / compute_fatigue_lower_bounds()
+        // above build().
         Ghat = compute_fatigue_bounds(inp, inp.rho);
+        Glow = compute_fatigue_lower_bounds(inp, inp.rho);
 
-        // g[i][j] -- asymmetric fatigue-flow variables, only on surviving arcs
+        // g[i][j] -- asymmetric fatigue-flow variables, only on surviving
+        // arcs. Lower bound is Glow[i], not 0 -- see add_fatigue_flow_coupling.
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
-                g_col[i][j] = add_col(0.0, Ghat[i]);
+                g_col[i][j] = add_col(Glow[i], Ghat[i]);
             }
 
         add_flow_conservation();
@@ -352,6 +392,7 @@ struct LPModel {
         f_col           = other.f_col;
         g_col           = other.g_col;
         Ghat            = other.Ghat;
+        Glow            = other.Glow;
         col_ub_cache    = other.col_ub_cache;
         n_rows_base     = other.n_rows_base;
         // added_secs starts empty ΓÇö each cloned node tracks its own cuts
@@ -467,6 +508,9 @@ struct LPModel {
                 add_row(-1e30, 0.0,
                         {g_col[i][j], x_col[i][j]},
                         {1.0,         -Ghat[i]});
+                add_row(0.0, 1e30,
+                        {g_col[i][j], x_col[i][j]},
+                        {1.0,         -Glow[i]});
             }
     }
 

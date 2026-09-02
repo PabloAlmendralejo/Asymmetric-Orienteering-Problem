@@ -185,6 +185,38 @@ static std::vector<double> compute_fatigue_bounds(const Input& inp, double rho) 
     return g;
 }
 
+// Valid LOWER bound on unclipped G_i (psi_ij can be negative) -- see
+// add_fatigue_flow_coupling / cpp/solver_flow_torremocha.cpp for the
+// derivation. Same min-plus construction, n-1 rounds, no end clipping.
+static std::vector<double> compute_fatigue_lower_bounds(const Input& inp, double rho) {
+    const int n = static_cast<int>(inp.pts.size());
+    const double POS_INF = 1e30;
+    std::vector<double> g(n, POS_INF);
+    g[0] = 0.0;
+
+    std::vector<std::array<double,3>> arcs;
+    arcs.reserve(n * n);
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (arc_survives_base(inp, i, j))
+                arcs.push_back({double(i), double(j), psi_arc(inp, i, j, rho)});
+
+    for (int round = 0; round < n - 1; ++round) {
+        bool changed = false;
+        for (const auto& a : arcs) {
+            int i = int(a[0]), j = int(a[1]);
+            double psi = a[2];
+            if (g[i] >= POS_INF / 2) continue;
+            double cand = g[i] + psi;
+            if (cand < g[j] - 1e-12) { g[j] = cand; changed = true; }
+        }
+        if (!changed) break;
+    }
+    for (int i = 0; i < n; ++i)
+        if (g[i] >= POS_INF / 2) g[i] = 0.0;
+    return g;
+}
+
 static double rcost_fatigue_asym(const Input& inp, const std::vector<int>& route, double rho) {
     if (route.empty()) return inp.cm[0][0];
     std::vector<int> seq = {0};
@@ -209,6 +241,7 @@ struct LPModel {
     std::vector<std::vector<int>> f_col;   // flow variables (cumulative time) -- legacy, A-B comparison
     std::vector<std::vector<int>> g_col;   // flow variables (cumulative asymmetric fatigue state G_i)
     std::vector<double> Ghat;
+    std::vector<double> Glow;
     std::vector<double> col_ub_cache;
     std::vector<double> sol_cache;
     int n_cols_base = 0;
@@ -303,10 +336,11 @@ struct LPModel {
             }
 
         Ghat = compute_fatigue_bounds(inp, inp.rho);
+        Glow = compute_fatigue_lower_bounds(inp, inp.rho);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
-                g_col[i][j] = add_col(0.0, Ghat[i]);
+                g_col[i][j] = add_col(Glow[i], Ghat[i]);
             }
 
         add_flow_conservation();
@@ -328,6 +362,7 @@ struct LPModel {
         f_col           = other.f_col;
         g_col           = other.g_col;
         Ghat            = other.Ghat;
+        Glow            = other.Glow;
         col_ub_cache    = other.col_ub_cache;
         n_rows_base     = other.n_rows_base;
         // added_secs starts empty — each cloned node tracks its own cuts
@@ -467,6 +502,9 @@ struct LPModel {
                 add_row(-1e30, 0.0,
                         {g_col[i][j], x_col[i][j]},
                         {1.0,         -Ghat[i]});
+                add_row(0.0, 1e30,
+                        {g_col[i][j], x_col[i][j]},
+                        {1.0,         -Glow[i]});
             }
     }
 
@@ -837,11 +875,17 @@ int find_and_add_cover_cuts(LPModel& lp, const Input& inp, int max_covers = 3) {
             if (val < 1e-6) continue;
             double w = inp.cm[i][j];
             if (!std::isfinite(w) || w <= 0) continue;
-            // Fatigue-aware weight: minimum possible fatigue cost of this arc
-            // (arrival at i is at least C_0i on any feasible route)
-            if (g_use_fatigue_covers && inp.fatigue_rate > 0 && i > 0
-                && std::isfinite(inp.cm[0][i]) && inp.cm[0][i] > 0) {
-                w *= (1.0 + inp.fatigue_rate * inp.cm[0][i] / inp.bud_raw);
+            // Fatigue-aware weight: true clipped fatigue state F_i >=
+            // Glow[i] always (Glow[i] is a valid lower bound on unclipped
+            // G_i, and F_i >= G_i -- see cpp/solver_flow_torremocha.cpp).
+            // Only a positive Glow[i] usefully tightens beyond the trivial
+            // F_i>=0 bound every other arc already gets. (Old formula used
+            // cm[0][i]/bud_raw, a time-based proxy left over from the
+            // pre-rework linear model -- no longer valid now that fatigue
+            // is driven by elevation gain/loss, not elapsed cost, and could
+            // overestimate the true minimum, producing invalid cuts.)
+            if (g_use_fatigue_covers && inp.fatigue_rate > 0 && i > 0) {
+                w *= (1.0 + inp.fatigue_rate * std::max(lp.Glow[i], 0.0));
             }
             arcs.push_back({lp.x_col[i][j], w, val});
         }

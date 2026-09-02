@@ -446,13 +446,15 @@ struct LPModel {
 
     // -- Asymmetric fatigue-state model (replaces add_fatigue_budget) --
 
+    // M_ij must satisfy M_ij >= Ghat[i] + psi_ij so the row goes slack when
+    // x_ij=0; use max(psi_ij,0) since psi_ij can exceed rho*phi_minus_ij.
     void add_fatigue_state_propagation(const Input& inp, double rho) {
         for (int i = 0; i < n; ++i)
             for (int j = 1; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
                 if (get_col_ub(x_col[i][j]) < 0.5) continue;
                 double psi = psi_arc(inp, i, j, rho);
-                double M_ij = Ghat[i] + rho * inp.loss[i][j];
+                double M_ij = Ghat[i] + std::max(psi, 0.0);
                 add_row(psi - M_ij, 1e30,
                         {G_col[j], G_col[i], x_col[i][j]},
                         {1.0,      -1.0,     -M_ij});
