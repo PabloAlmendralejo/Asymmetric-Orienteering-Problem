@@ -342,10 +342,15 @@ struct LPModel {
 
         Ghat = compute_fatigue_bounds(inp, inp.rho);
         Glow = compute_fatigue_lower_bounds(inp, inp.rho);
+        // Column bound must include 0 unconditionally (not [Glow[i],
+        // Ghat[i]] directly): when Glow[i]>0, an unconditional floor
+        // forces g_ij>0 -- and via add_fatigue_flow_coupling, x_ij>0 --
+        // on every outgoing arc simultaneously, infeasible against flow
+        // conservation. See cpp/solver_flow_torremocha.cpp.
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
-                g_col[i][j] = add_col(Glow[i], Ghat[i]);
+                g_col[i][j] = add_col(std::min(Glow[i], 0.0), std::max(Ghat[i], 0.0));
             }
 
         add_flow_conservation();
@@ -1599,22 +1604,31 @@ struct Solver {
     bool use_routing_infeasibility = true;
     bool use_cycle_covers = true;
     bool use_path_ineq = true;
+    // Warm-start ablation (point 4 of the post-rejection scope list): when
+    // false, the B&C gets no incumbent at all -- neither the SA solution
+    // passed into solve() nor the greedy fallback below -- so it starts
+    // from best_pts=0 and must find and prove its own first feasible
+    // solution from scratch, isolating what the warm start is actually
+    // buying (time-to-first-incumbent, final gap, or neither).
+    bool use_warm_start = true;
 
     explicit Solver(const Input& i) : inp(i) {
         root.build(inp);
     }
 
     void solve(double warm_start_pts = 0.0, std::vector<int> warm_start_route = {}) {
-        // Warm start from provided solution (e.g. SA result)
-        if (warm_start_pts > best_pts) {
-            best_pts = warm_start_pts;
-            best_route = std::move(warm_start_route);
+        if (use_warm_start) {
+            // Warm start from provided solution (e.g. SA result)
+            if (warm_start_pts > best_pts) {
+                best_pts = warm_start_pts;
+                best_route = std::move(warm_start_route);
+            }
+            // Also try greedy
+            auto gr = greedy_route(inp);
+            double gr_pts = std::accumulate(gr.begin(), gr.end(), 0.0,
+                [&](double s, int v) { return s + inp.pts[v]; });
+            if (gr_pts > best_pts) { best_pts = gr_pts; best_route = std::move(gr); }
         }
-        // Also try greedy
-        auto gr = greedy_route(inp);
-        double gr_pts = std::accumulate(gr.begin(), gr.end(), 0.0,
-            [&](double s, int v) { return s + inp.pts[v]; });
-        if (gr_pts > best_pts) { best_pts = gr_pts; best_route = std::move(gr); }
         std::cerr << "B&C warm start: " << best_pts << " pts\n";
 
         // B&C search — best-first (priority queue by UB)
@@ -1869,6 +1883,7 @@ int main(int argc, char* argv[]) {
 
     // Parse command-line flags
     bool flag_covers = true, flag_routing = true, flag_cycle = true, flag_path = true;
+    bool flag_warm_start = true;
     for (int a = 1; a < argc; ++a) {
         std::string arg = argv[a];
         if (arg == "--coupling=off")        g_use_tightened_coupling = false;
@@ -1885,6 +1900,8 @@ int main(int argc, char* argv[]) {
         else if (arg == "--cycle=on")       flag_cycle = true;
         else if (arg == "--path=off")       flag_path = false;
         else if (arg == "--path=on")        flag_path = true;
+        else if (arg == "--warm-start=off") flag_warm_start = false;
+        else if (arg == "--warm-start=on")  flag_warm_start = true;
         else if (arg.rfind("--config=", 0) == 0) config_name = arg.substr(9);
         else if (arg.rfind("--csv=", 0) == 0)    csv_file = arg.substr(6);
         else input_dir = arg;
@@ -1897,7 +1914,8 @@ int main(int argc, char* argv[]) {
               << " covers=" << (flag_covers ? "on" : "off")
               << " routing=" << (flag_routing ? "on" : "off")
               << " cycle=" << (flag_cycle ? "on" : "off")
-              << " path=" << (flag_path ? "on" : "off") << "\n";
+              << " path=" << (flag_path ? "on" : "off")
+              << " warm-start=" << (flag_warm_start ? "on" : "off") << "\n";
 
     // Scan input directory for op_input_*.json files
     std::vector<std::pair<std::string,std::string>> maps;
@@ -1945,6 +1963,7 @@ int main(int argc, char* argv[]) {
             solver.use_routing_infeasibility = flag_routing;
             solver.use_cycle_covers = flag_cycle;
             solver.use_path_ineq = flag_path;
+            solver.use_warm_start = flag_warm_start;
             solver.solve(sa_pts, sa_route);
             double bnc_s = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - t1).count();

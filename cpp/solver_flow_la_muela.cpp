@@ -374,11 +374,17 @@ struct LPModel {
         Glow = compute_fatigue_lower_bounds(inp, inp.rho);
 
         // g[i][j] -- asymmetric fatigue-flow variables, only on surviving
-        // arcs. Lower bound is Glow[i], not 0 -- see add_fatigue_flow_coupling.
+        // arcs. Column bound must include 0 unconditionally
+        // (min(Glow[i],0)..max(Ghat[i],0)), not [Glow[i],Ghat[i]] directly:
+        // when Glow[i]>0 (a node reachable only via net-uphill prefixes),
+        // an unconditional Glow[i] floor forces g_ij>0 on EVERY outgoing
+        // arc regardless of x_ij, which via add_fatigue_flow_coupling
+        // forces x_ij>0 on all of them simultaneously -- infeasible
+        // against flow conservation. See solver_flow_torremocha.cpp.
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
-                g_col[i][j] = add_col(Glow[i], Ghat[i]);
+                g_col[i][j] = add_col(std::min(Glow[i], 0.0), std::max(Ghat[i], 0.0));
             }
 
         add_flow_conservation();

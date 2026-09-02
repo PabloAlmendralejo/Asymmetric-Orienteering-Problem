@@ -420,13 +420,25 @@ struct LPModel {
         Glow = compute_fatigue_lower_bounds(inp, inp.rho);
 
         // g[i][j] -- asymmetric fatigue-flow variables, only on surviving
-        // arcs. Lower bound is Glow[i] (not 0): psi_ij can be negative, so
-        // the true unclipped G_i reachable at a node can itself be
-        // negative on a net-downhill prefix -- see add_fatigue_flow_coupling.
+        // arcs. The column's OWN bound must include 0 unconditionally
+        // (min(Glow[i],0) .. max(Ghat[i],0)), NOT [Glow[i],Ghat[i]]
+        // directly: g_ij only needs to reach Glow[i]/Ghat[i] when x_ij=1,
+        // and must be able to sit at exactly 0 when x_ij=0 (arc unused).
+        // Declaring the column's floor as Glow[i] unconditionally, when
+        // Glow[i] > 0 (a node reachable only via net-uphill prefixes --
+        // common, not an edge case), forces g_ij > 0 regardless of x_ij,
+        // which through add_fatigue_flow_coupling's g_ij <= Ghat[i]*x_ij
+        // forces x_ij > 0 on EVERY outgoing arc from that node
+        // simultaneously -- infeasible against flow conservation
+        // (sum_j x_ij = y_i <= 1) as soon as a node has more than a
+        // couple of surviving outgoing arcs. The coupling rows (below)
+        // already enforce the tight [Glow[i],Ghat[i]] range whenever
+        // x_ij=1 and force g_ij=0 when x_ij=0; the column bound only
+        // needs to be wide enough to allow both.
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
-                g_col[i][j] = add_col(Glow[i], Ghat[i]);
+                g_col[i][j] = add_col(std::min(Glow[i], 0.0), std::max(Ghat[i], 0.0));
             }
 
         add_flow_conservation();

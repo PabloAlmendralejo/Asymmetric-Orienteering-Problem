@@ -337,10 +337,15 @@ struct LPModel {
 
         Ghat = compute_fatigue_bounds(inp, inp.rho);
         Glow = compute_fatigue_lower_bounds(inp, inp.rho);
+        // Column bound must include 0 unconditionally (not [Glow[i],
+        // Ghat[i]] directly): when Glow[i]>0, an unconditional floor
+        // forces g_ij>0 -- and via add_fatigue_flow_coupling, x_ij>0 --
+        // on every outgoing arc simultaneously, infeasible against flow
+        // conservation. See cpp/solver_flow_torremocha.cpp.
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j) {
                 if (x_col[i][j] < 0) continue;
-                g_col[i][j] = add_col(Glow[i], Ghat[i]);
+                g_col[i][j] = add_col(std::min(Glow[i], 0.0), std::max(Ghat[i], 0.0));
             }
 
         add_flow_conservation();
