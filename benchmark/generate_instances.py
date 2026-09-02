@@ -154,7 +154,7 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
 # ── Benchmark configurations ──
 
 CONFIGS = {
-    'nodes': [20, 30, 40, 50, 75, 100],
+    'nodes': [20, 30, 40, 50, 75, 100, 125, 150, 200],
     'asymmetry': [0.0, 0.1, 0.25, 0.5],
     'fatigue_rate': [0.0, 0.1, 0.2, 0.3],
     'budget': ['loose', 'medium', 'tight'],
@@ -163,6 +163,12 @@ CONFIGS = {
 # Representative subset: vary one parameter at a time from a baseline
 BASELINE = {'n': 40, 'asymmetry': 0.25, 'fatigue_rate': 0.2, 'budget': 'medium'}
 
+# Repeated seeds per configuration: turns each single-point comparison into
+# a distribution, addressing the "21 instances from one generation process
+# is too narrow a basis" review feedback -- lets results be reported with
+# variance instead of one number per config.
+SEEDS_PER_CONFIG = 3
+
 
 def generate_all(output_dir='instances'):
     """Generate the full benchmark suite."""
@@ -170,51 +176,58 @@ def generate_all(output_dir='instances'):
     manifest = []
     instance_id = 0
 
-    # 1. Vary node count (baseline asymmetry/fatigue/budget)
+    # 1. Vary node count (baseline asymmetry/fatigue/budget), multiple seeds
     for n in CONFIGS['nodes']:
-        instance_id += 1
-        name = f"bench_{instance_id:03d}_n{n}_a25_f20_med"
-        data, meta = generate_instance(
-            n, asymmetry=0.25, fatigue_rate=0.2,
-            budget_tightness='medium', seed=1000 + instance_id)
-        _save(output_dir, name, data, meta, manifest)
+        for rep in range(SEEDS_PER_CONFIG):
+            instance_id += 1
+            name = f"bench_{instance_id:03d}_n{n}_a25_f20_med_s{rep}"
+            data, meta = generate_instance(
+                n, asymmetry=0.25, fatigue_rate=0.2,
+                budget_tightness='medium', seed=1000 + instance_id)
+            _save(output_dir, name, data, meta, manifest)
 
-    # 2. Vary asymmetry (baseline n/fatigue/budget)
+    # 2. Vary asymmetry (baseline n/fatigue/budget), multiple seeds
     for asym in CONFIGS['asymmetry']:
-        instance_id += 1
-        a_str = f"{int(asym * 100):02d}"
-        name = f"bench_{instance_id:03d}_n40_a{a_str}_f20_med"
-        data, meta = generate_instance(
-            40, asymmetry=asym, fatigue_rate=0.2,
-            budget_tightness='medium', seed=2000 + instance_id)
-        _save(output_dir, name, data, meta, manifest)
+        for rep in range(SEEDS_PER_CONFIG):
+            instance_id += 1
+            a_str = f"{int(asym * 100):02d}"
+            name = f"bench_{instance_id:03d}_n40_a{a_str}_f20_med_s{rep}"
+            data, meta = generate_instance(
+                40, asymmetry=asym, fatigue_rate=0.2,
+                budget_tightness='medium', seed=2000 + instance_id)
+            _save(output_dir, name, data, meta, manifest)
 
-    # 3. Vary fatigue rate (baseline n/asymmetry/budget)
+    # 3. Vary fatigue rate (baseline n/asymmetry/budget), multiple seeds
     for fr in CONFIGS['fatigue_rate']:
-        instance_id += 1
-        f_str = f"{int(fr * 100):02d}"
-        name = f"bench_{instance_id:03d}_n40_a25_f{f_str}_med"
-        data, meta = generate_instance(
-            40, asymmetry=0.25, fatigue_rate=fr,
-            budget_tightness='medium', seed=3000 + instance_id)
-        _save(output_dir, name, data, meta, manifest)
+        for rep in range(SEEDS_PER_CONFIG):
+            instance_id += 1
+            f_str = f"{int(fr * 100):02d}"
+            name = f"bench_{instance_id:03d}_n40_a25_f{f_str}_med_s{rep}"
+            data, meta = generate_instance(
+                40, asymmetry=0.25, fatigue_rate=fr,
+                budget_tightness='medium', seed=3000 + instance_id)
+            _save(output_dir, name, data, meta, manifest)
 
-    # 4. Vary budget tightness (baseline n/asymmetry/fatigue)
+    # 4. Vary budget tightness (baseline n/asymmetry/fatigue), multiple seeds
     for bud in CONFIGS['budget']:
-        instance_id += 1
-        b_str = bud[0]  # l, m, t
-        name = f"bench_{instance_id:03d}_n40_a25_f20_{b_str}"
-        data, meta = generate_instance(
-            40, asymmetry=0.25, fatigue_rate=0.2,
-            budget_tightness=bud, seed=4000 + instance_id)
-        _save(output_dir, name, data, meta, manifest)
+        for rep in range(SEEDS_PER_CONFIG):
+            instance_id += 1
+            b_str = bud[0]  # l, m, t
+            name = f"bench_{instance_id:03d}_n40_a25_f20_{b_str}_s{rep}"
+            data, meta = generate_instance(
+                40, asymmetry=0.25, fatigue_rate=0.2,
+                budget_tightness=bud, seed=4000 + instance_id)
+            _save(output_dir, name, data, meta, manifest)
 
-    # 5. Extreme cases
+    # 5. Extreme cases (kept single-seed: these are boundary-condition
+    # probes, not part of the size/asymmetry/fatigue/budget distributions)
     extremes = [
         (20, 0.0, 0.0, 'loose', 'symmetric_easy'),
         (100, 0.5, 0.3, 'tight', 'asymmetric_hard'),
         (50, 0.5, 0.0, 'medium', 'high_asym_no_fatigue'),
         (50, 0.0, 0.3, 'medium', 'symmetric_high_fatigue'),
+        (200, 0.5, 0.3, 'tight', 'asymmetric_hard_large'),
+        (150, 0.0, 0.0, 'loose', 'symmetric_easy_large'),
     ]
     for n, asym, fr, bud, label in extremes:
         instance_id += 1

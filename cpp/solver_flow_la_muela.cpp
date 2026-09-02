@@ -1175,6 +1175,33 @@ struct Solver {
             }
         }
 
+        // y integral alone does not certify an integer-feasible route: x_ij
+        // can still be fractional even when every node's visit status is
+        // fixed (e.g. two fractional sub-routings both consistent with the
+        // same y-degree constraints, not yet separated by any SEC/
+        // connectivity cut found so far). extract_route()'s x>0.5
+        // threshold-and-follow-successor heuristic would silently truncate
+        // or misroute in that case, undercounting the true score for a
+        // genuinely achievable y-pattern -- so a leaf is only accepted as
+        // resolved once x is ALSO fully integral; otherwise branch on the
+        // most fractional x_ij, same as for y above.
+        if (integer_sol) {
+            for (int i = 0; i < root.n && integer_sol; ++i) {
+                for (int j = 0; j < root.n; ++j) {
+                    if (root.x_col[i][j] < 0) continue;
+                    double v = lp.prim(root.x_col[i][j]);
+                    double frac = std::min(v, 1.0 - v);
+                    if (frac > 1e-5) {
+                        integer_sol = false;
+                        if (frac > max_frac) {
+                            max_frac = frac;
+                            branch_col = root.x_col[i][j];
+                        }
+                    }
+                }
+            }
+        }
+
         if (integer_sol) {
             // Extract and validate route
             auto route = extract_route(lp);
@@ -1185,7 +1212,7 @@ struct Solver {
                 best_route = std::move(route);
                 std::cerr << "New best: " << best_pts << " pts (" << best_route.size() << " nodes)\n";
             }
-        } else if (branch_col > 0) {
+        } else if (branch_col >= 0) {
             // Branch
             BNCNode node0 = node, node1 = node;
             node0.fixings.emplace_back(branch_col, 0.0);
@@ -1262,7 +1289,7 @@ struct MapResult {
 };
 
 static const std::vector<double> RHO_SWEEP_VALUES = {0.0, 0.25, 0.5, 0.75, 1.0};
-static const std::vector<double> LAMBDA_SWEEP_VALUES = {0.0, 1e-5, 1.75e-5, 5e-5, 1e-4};
+static const std::vector<double> LAMBDA_SWEEP_VALUES = {0.0, 1.75e-5, 1e-4, 1e-3, 5e-3, 1e-2};
 
 int main(int argc, char** argv) {
     bool rho_sweep = false, lambda_sweep = false;

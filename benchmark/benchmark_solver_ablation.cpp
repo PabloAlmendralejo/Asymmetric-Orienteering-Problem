@@ -1718,6 +1718,30 @@ struct Solver {
             }
         }
 
+        // y integral alone does not certify an integer-feasible route: x_ij
+        // can still be fractional even when every node's visit status is
+        // fixed (e.g. two fractional sub-routings both consistent with the
+        // same y-degree constraints, not yet separated by any SEC/
+        // connectivity cut found so far). extract_route()'s x>0.5
+        // threshold-and-follow-successor heuristic would silently truncate
+        // or misroute in that case, undercounting the true score for a
+        // genuinely achievable y-pattern -- so a leaf is only accepted as
+        // resolved once x is ALSO fully integral; otherwise feed the
+        // fractional x_ij into the same branching-selection logic as y.
+        if (integer_sol) {
+            for (int i = 0; i < root.n; ++i) {
+                for (int j = 0; j < root.n; ++j) {
+                    if (root.x_col[i][j] < 0) continue;
+                    double v = lp.prim(root.x_col[i][j]);
+                    double frac = std::min(v, 1.0 - v);
+                    if (frac > 1e-5) {
+                        integer_sol = false;
+                        candidates.push_back({-1, root.x_col[i][j]});
+                    }
+                }
+            }
+        }
+
         if (integer_sol) {
             // Extract and validate route
             auto route = extract_route(lp);
@@ -1770,7 +1794,7 @@ struct Solver {
                 }
             }
 
-            if (branch_col > 0) {
+            if (branch_col >= 0) {
                 BNCNode node0 = node, node1 = node;
                 node0.fixings.emplace_back(branch_col, 0.0);
                 node0.ub = lp_ub;
