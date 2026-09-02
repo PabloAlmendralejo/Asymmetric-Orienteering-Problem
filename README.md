@@ -1,122 +1,221 @@
-# Modelo de fatiga asimétrico no lineal (Sec. 3.6)
+# Optimal Route Planning for Orienteering on Real Terrain
 
-Sustituye `f(t) = 1 + λt/B` (orden-invariante, ver discusión EJOR-D-26-01706)
-por un estado de fatiga `G_i` propagado arco a arco:
+End-to-end framework for solving the Asymmetric Orienteering Problem with Fatigue (AOPF) on real terrain, combining a terrain-aware asymmetric cost model with exact Branch-and-Cut optimisation.
+
+## Overview
+
+The pipeline has two stages:
+
+1. **Python** — Preprocesses orienteering map files (OMAP), digital elevation models (DEM),
+   and map imagery into an asymmetric cost matrix using:
+   - IOF symbol-based cost raster (ACR)
+   - Hypsometry Cost Raster (HCR) with IQR scaling
+   - Minetti metabolic slope model (directional)
+   - A state-based, order-dependent fatigue model (see below)
+
+2. **C++** — Solves the Orienteering Problem exactly via Branch-and-Cut with HiGHS,
+   warm-started by Simulated Annealing.
+
+## Fatigue Model
+
+> **Status: model rework in progress.** The formulation below is implemented and
+> compiles/runs across all solver variants, but the paper's numeric results
+> (Sec. 6–7) and the real-terrain instances still reflect the *previous* model —
+> see "Known gaps" below.
+
+The original linear model, `f(t) = 1 + λt/B`, is provably order-invariant (the
+same set of arcs gives the same total fatigue cost regardless of visit order),
+which collapses the problem to a much simpler one — this was the central
+objection in EJOR-D-26-01706's review. It's replaced by a per-node fatigue
+*state* `G_i`, propagated arc-by-arc:
 
 ```
 ψ_ij = φ+_ij − ρ·φ-_ij + μ·δ_ij
 ```
 
-con contribución distinta para subida (`φ+`), bajada (`φ-`, ponderada por
-`ρ`) y distancia horizontal (`δ`, ponderada por `μ`). `ρ` se trata como
-parámetro de sensibilidad (sweep), no calibrado a un único valor. `μ` se
-deriva de la curva de Minetti ya usada para el coste base (no es un
-parámetro libre). `λ` tampoco tiene un valor único de literatura
-utilizable en las nuevas unidades — se trata como sweep también, con
-`1.75e-5` como ancla de orden de magnitud (ver discusión completa en
-`paper/orienteering_paper.tex`, Sec. 3.6 y Sec. 7).
+`φ+`/`φ-` are cumulative uphill/downhill elevation (metres) and `δ` is path
+distance (metres) along the cost-optimal path for arc `(i,j)`. `ρ` (downhill
+recovery fraction) and `λ` (fatigue rate) are treated as sensitivity
+parameters — swept, not calibrated to a single value — since neither has a
+literature value directly usable in these units. `μ` is derived (not swept)
+from the Minetti curve already used for the base cost. Full derivation and
+the calibration discussion are in `paper/orienteering_paper.tex`, Sec. 3.6
+and Sec. 7.
 
-El estado real (clip) es `F_j = max(0, F_i + ψ_ij)`; la relajación LP usa
-la versión sin clip `G_i` (cota superior válida sobre `F_i`) por las
-razones detalladas en el paper.
+The true (clipped) fatigue state is `F_j = max(0, F_i + ψ_ij)`; the LP
+relaxation uses the unclipped `G_i` (a valid upper bound on `F_i`) for the
+McCormick (MTZ) and flow-coupling constraints — see Sec. 3 of the paper for
+the full formulation, including why the flow formulation needs a *two-sided*
+coupling bound (`Ĝ_i` and `Ǧ_i`) where the original model only needed one.
 
-## Archivos modificados
+### Known gaps
 
-- `python/core/cost_functions.py` — `derive_mu()`: deriva `μ` de la
-  curva de Minetti (coste de 1 metro llano ÷ coste del metro vertical
-  más barato alcanzable).
-- `python/core/pathfinding.py` — el Dijkstra anisotrópico acumula, sobre
-  el mismo árbol de caminos mínimos que usa para `cm`, el desnivel
-  positivo (`gain`, φ+), negativo (`loss`, φ-) y la distancia real
-  recorrida (`dist`, δ) hasta cada nodo. `compute_cost_matrix` devuelve
-  ahora `(cm, gain_m, loss_m, dist_m)`. También corrige un bug de
-  unidades preexistente: `gain`/`loss` usaban `step_len` (recuento de
-  pasos de grid) en vez de metros reales (`step_len*ds*cell_m`) —
-  entendía mal el desnivel real de terreno por un factor `ds*cell_m`
-  (16x para Torremocha).
-- `python/run_pipeline.py` — exporta `gain`, `loss`, `dist`,
-  `rho_default` y `mu_default` en el JSON de cada instancia.
-- `benchmark/generate_instances.py` — sintetiza `dist` (distancia
-  euclídea del arco) y `mu_default` (copia local de `derive_mu`) para
-  las 21 instancias sintéticas de benchmark.
-- `cpp/solver_flow_{torremocha,la_muela}.cpp`,
-  `cpp/solver_mtz_{torremocha,la_muela}.cpp`,
-  `benchmark/benchmark_solver_{flow,mtz,ablation}.cpp` — las 7 variantes
-  del solver (ambas formulaciones, ambos terrenos reales, más las
-  variantes de benchmark) implementan el modelo completo:
-  - `psi_arc(i,j,rho) = gain_ij − rho·loss_ij + mu·dist_ij`.
-  - `compute_fatigue_bounds`/`compute_fatigue_lower_bounds`: cotas
-    `Ĝ_i`/`Ǧ_i` vía Bellman-Ford en semianillo (max,+)/(min,+), acotado
-    a n-1 rondas.
-  - `rcost_fatigue_asym`: coste real con clip (`max(0,·)`), usado para
-    validar rutas concretas (SA, solución entera del B&C).
-  - MTZ: variable de estado `G_col`/`Ghat` + envolvente McCormick
-    `u_col` (equivalente a `t_i`/`w_ij` del modelo antiguo).
-  - Flow: variables de flujo `g_col` con acoplamiento **de dos lados**
-    (`Glow[i]` y `Ghat[i]`, no solo `Ghat[i]` — necesario porque `ψ`
-    puede ser negativo, a diferencia del flujo de tiempo original).
-  - `main()` acepta `--rho-sweep` (ρ ∈ {0, 0.25, 0.5, 0.75, 1.0}) y
-    `--lambda-sweep` (λ ∈ {0, 1e-5, 1.75e-5, 5e-5, 1e-4}) — no ambos a
-    la vez. `benchmark_solver_ablation.cpp` no tiene ningún sweep (su
-    CLI es para alternar familias de cortes, no para sensibilidad).
-  - Cada JSON de salida incluye `fatigue_cost` (modelo corregido) y
-    `fatigue_cost_legacy` (modelo original del paper), lado a lado.
+- **Real-terrain data**: `op_input_torremocha_*.json` / `op_input_la_muela_*.json`
+  don't exist in this checkout — rerun the Python pipeline (`--preprocess`) to
+  regenerate them with `gain`/`loss`/`dist`. The `cpp/solver_*` binaries have
+  only been tested against the synthetic benchmark instances so far.
+- **λ calibration**: no literature value exists in the new units (metres of
+  elevation, not a normalised budget fraction). Treated as a sweep
+  (`--lambda-sweep`), anchored to an order-of-magnitude estimate, not a
+  calibrated constant.
+- **Paper results (Sec. 6–7)**: the numeric tables (Torremocha/La Muela,
+  MTZ-vs-Flow, ablation study) still reflect the old model. Updating them
+  needs the full experimental suite rerun against regenerated real-terrain
+  data.
 
-## Compilar
+## Project Structure
 
-No hay toolchain de C++ preinstalado; requiere MSVC (Build Tools) +
-HiGHS compilado desde fuente (headers/lib, no solo `highs.dll`):
-
-```bash
-# una vez: clonar y compilar HiGHS (CMake + MSVC, Release)
-git clone https://github.com/ERGO-Code/HiGHS.git
-cmake -B HiGHS/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DFAST_BUILD=ON HiGHS
-cmake --build HiGHS/build --config Release
-
-# compilar cada solver (ejemplo con vcvarsall de MSVC ya cargado)
-cl.exe /O2 /MD /std:c++20 /EHsc cpp/solver_flow_torremocha.cpp ^
-  /I HiGHS/highs /I HiGHS/build ^
-  /link /LIBPATH:HiGHS/build/Release/bin highs.lib /out:solver_flow_torremocha.exe
+```
+├── python/
+│   ├── run_pipeline.py              # Main entry point
+│   ├── requirements.txt
+│   ├── core/
+│   │   ├── preprocessing.py         # Raw files → terrain cache (.npz)
+│   │   ├── cost_functions.py        # Minetti, fatigue (incl. derive_mu), ISOM weights
+│   │   ├── terrain_analysis.py      # HCR (TRI, PC, SLO), IQR scaling
+│   │   ├── omap_parser.py           # OMAP XML parsing, symbol classification
+│   │   ├── rasterization.py         # Line/polygon rasterization
+│   │   ├── coordinate_transforms.py # Pixel ↔ UTM ↔ grid transforms
+│   │   ├── pathfinding.py           # Anisotropic Dijkstra, cost/gain/loss/dist matrices
+│   │   ├── route_optimizer.py       # Greedy + SA route optimization
+│   │   ├── control_placement.py     # Control point generation (7 strategies)
+│   │   └── visualize_results.py     # Map, cost surfaces, routes, hillshade
+│   └── config/
+│       ├── torremocha.py
+│       └── la_muela.py
+├── cpp/
+│   ├── solver_flow_torremocha.cpp   # Flow B&C solver, Torremocha
+│   ├── solver_flow_la_muela.cpp     # Flow B&C solver, La Muela
+│   ├── solver_mtz_torremocha.cpp    # MTZ B&C solver, Torremocha
+│   └── solver_mtz_la_muela.cpp      # MTZ B&C solver, La Muela
+├── benchmark/
+│   ├── generate_instances.py        # Parameterized instance generator
+│   ├── benchmark_solver_mtz.cpp     # MTZ B&C solver for benchmarks
+│   ├── benchmark_solver_flow.cpp    # Flow B&C solver for benchmarks
+│   ├── benchmark_solver_ablation.cpp # Ablation study solver (cut toggles, no sweep)
+│   ├── compare_heuristics.cpp       # Greedy / GA / ACO / SA comparison
+│   ├── instances/                   # 21 synthetic benchmark instances
+│   └── README.md
+├── paper/
+│   └── orienteering_paper.tex       # LaTeX paper
+├── data/                            # Input terrain data (Git LFS)
+│   ├── torremocha/
+│   └── la_muela/
+└── .gitignore
 ```
 
-## Cómo probar rápido
+## Setup
 
+### Python
 ```bash
 cd python
-python run_pipeline.py torremocha --preprocess   # regenera JSONs con gain/loss/dist
-cd ../cpp
-./solver_flow_torremocha              # una corrida, rho=0.5/mu derivado (defaults del JSON)
-./solver_flow_torremocha --rho-sweep     # barrido de sensibilidad en rho
-./solver_flow_torremocha --lambda-sweep  # barrido de sensibilidad en lambda
+pip install -r requirements.txt
 ```
 
-Las instancias sintéticas de benchmark (`benchmark/instances/*.json`) ya
-incluyen `gain`/`loss`/`dist`/`mu_default` y sirven para probar sin
-regenerar datos reales de terreno.
+### C++ (Branch-and-Cut solver)
+- MSVC or GCC with C++20 support
+- [HiGHS](https://highs.dev/) — needs headers + a compiled `.lib`/`.a`, not just
+  the runtime `.dll`/`.so`. If not already built:
+  ```bash
+  git clone https://github.com/ERGO-Code/HiGHS.git
+  cmake -B HiGHS/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DFAST_BUILD=ON HiGHS
+  cmake --build HiGHS/build --config Release
+  ```
 
-## Pendiente
+## Usage
 
-1. **Datos reales de terreno**: los `op_input_torremocha_*.json` /
-   `op_input_la_muela_*.json` no existen en este checkout — hay que
-   volver a correr el pipeline de Python (arriba) para regenerarlos con
-   `gain`/`loss`/`dist` correctos (incluyendo el fix del bug de unidades).
-   Los solvers `cpp/solver_*` nunca se han corrido de punta a punta
-   contra terreno real, solo contra las instancias sintéticas.
-2. **Recalibración de λ**: sigue sin haber un valor de literatura
-   directamente utilizable en las nuevas unidades (metros de desnivel,
-   no fracción de presupuesto). Se trata como sweep con `1.75e-5` como
-   ancla de orden de magnitud, no como valor calibrado — ver
-   `paper/orienteering_paper.tex` Sec. 7 para el detalle de la búsqueda
-   de literatura y el razonamiento.
-3. **Resultados numéricos del paper** (Sec. 6-7: tablas Torremocha/La
-   Muela, comparativa MTZ-vs-Flow, estudio de ablación): siguen
-   reflejando el modelo antiguo. Actualizarlos honestamente requiere
-   correr la batería experimental completa (horas de cómputo) con datos
-   reales regenerados — no hecho todavía.
-4. **Validez general de `Ĝ_i`/`Ǧ_i` como cota**: usadas en la práctica y
-   verificadas en instancias de prueba, pero no hay una prueba
-   rigurosa general de que `Ĝ_i` sea siempre una cota válida sobre el
-   estado real para cualquier grafo — no afecta la corrección de las
-   rutas finalmente aceptadas (siempre se re-validan exactas antes de
-   reportarse), pero sí podría afectar la completitud/optimalidad de la
-   búsqueda B&C en casos adversariales no explorados.
+### Full pipeline
+```bash
+cd python
+
+# First run (preprocessing from raw files):
+python run_pipeline.py torremocha --preprocess
+
+# Subsequent runs (uses cached .npz):
+python run_pipeline.py torremocha
+
+# La Muela:
+python run_pipeline.py la_muela --preprocess
+```
+
+### C++ solver
+```bash
+# Compile (Windows/MSVC), e.g. for the Torremocha flow solver:
+cl.exe /O2 /MD /std:c++20 /EHsc solver_flow_torremocha.cpp ^
+  /I<highs_include> /I<highs_build_dir> ^
+  /link /LIBPATH:<highs_lib_dir> highs.lib /out:solver_flow_torremocha.exe
+
+# Run (from directory with op_input_*.json files):
+solver_flow_torremocha.exe
+solver_flow_torremocha.exe --rho-sweep     # sensitivity sweep over rho
+solver_flow_torremocha.exe --lambda-sweep  # sensitivity sweep over lambda
+```
+
+### Visualization
+```bash
+cd python/core
+python visualize_results.py torremocha --output-dir figures/
+python visualize_results.py la_muela --output-dir figures/
+```
+
+Generates: map overview, cost surface panels (ACR/HCR/combined/elevation/slope),
+hillshade, directional asymmetry heatmap, and route overlay with A* traced paths.
+
+## Study Areas
+
+| | Torremocha | La Muela |
+|---|---|---|
+| Location | Cáceres, Spain | Salamanca, Spain |
+| Area | 2.1 × 2.9 km | 2.8 × 3.2 km |
+| Resolution | 2.0 m | 2.0 m |
+| Relief | 55 m | 464 m |
+| Cost asymmetry | 16.1% | 50.0% |
+| IQR scaling (c) | 0.87 | 2.18 |
+
+(Instance-level results — proven-optimal counts, LP gaps — are omitted here
+pending the experimental rerun noted under "Known gaps" above; see the paper
+for the most recent numbers, with the caveat that those predate the fatigue
+model rework too.)
+
+## Benchmark Suite
+
+Parameterized instances for the asymmetric OP with fatigue — the first
+benchmark set for this problem variant. See `benchmark/README.md` for details.
+
+Instances vary across:
+- Node count: 20, 30, 40, 50, 75, 100
+- Asymmetry: 0% to 50%
+- Fatigue rate: 0.0 to 0.3
+- Budget tightness: loose (70%), medium (50%), tight (30%) of NN tour cost
+
+## B&C Solver Features
+
+Two LP formulations:
+- **MTZ formulation**: state propagation (`G_i`) with tightened big-M constants, McCormick linearisation of the bilinear fatigue term
+- **Flow formulation**: single-commodity flow variables (`g_ij`) with two-sided coupling bounds, natively linear fatigue budget (no McCormick)
+
+Valid inequalities (both formulations):
+- Directed subtour elimination (Kosaraju SCC)
+- Connectivity cuts (reverse BFS + Dinic max-flow)
+- Lifted cover cuts with fatigue-aware arc weights (B1)
+- Routing infeasibility cuts based on assignment relaxation (B2)
+- Directed cycle cover cuts (B3)
+- Directed path inequality cuts (B4)
+
+Other features:
+- Fatigue-aware arc elimination
+- SA warm-start with auto-calibrated iterations/restarts
+- DFS node selection for terrain instances, BFS for benchmarks
+
+## Data
+
+Input terrain data (TIF maps, DEMs, OMAP files) are included under
+`data/torremocha/` and `data/la_muela/`, tracked via Git LFS.
+
+## Citation
+
+See `paper/orienteering_paper.tex` for the full methodology and results.
+
+## Author
+
+Pablo Borrego Ramos — paborrego@alumnos.unex.es
