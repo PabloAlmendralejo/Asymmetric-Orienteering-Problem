@@ -329,6 +329,7 @@ struct LPModel {
     std::vector<double> Glow;              // per-node lower bound on G_i, from compute_fatigue_lower_bounds()
     std::vector<double> col_ub_cache;
     std::vector<double> sol_cache;      // cached primal solution after each solve()
+    int last_model_status = 0;
     int n_cols_base = 0;
     int n_rows_base = 0;
 
@@ -716,7 +717,22 @@ struct LPModel {
     bool solve() {
         Highs_changeObjectiveSense(highs, -1);  // -1 = kHighsObjSenseMaximize
         int status = Highs_run(highs);
-        bool ok = status == 0 && Highs_getModelStatus(highs) == 7;
+        last_model_status = Highs_getModelStatus(highs);
+        bool ok = status == 0 && last_model_status == 7;
+        if (!ok && solve_failed_unresolved()) {
+            // A warm-started re-solve after adding cuts reuses the previous
+            // basis and skips presolve/rescaling -- on this model's
+            // coefficient range (matrix entries span ~1e8, mixing raw
+            // distances/costs with 0/1 columns) that can leave HiGHS unable
+            // to certify Optimal/Infeasible even when the point is
+            // numerically fine (tiny residuals). Retry once from a cleared
+            // solver state so presolve+scaling run fresh, matching what the
+            // (always-clean) root solve already does successfully.
+            Highs_clearSolver(highs);
+            status = Highs_run(highs);
+            last_model_status = Highs_getModelStatus(highs);
+            ok = status == 0 && last_model_status == 7;
+        }
         if (ok) {
             // Cache solution once so prim() is O(1)
             int nc = Highs_getNumCol(highs);
@@ -728,6 +744,11 @@ struct LPModel {
         }
         return ok;
     }
+
+    // kInfeasible (8) is the only status where dropping the node is sound.
+    // Any other non-Optimal status means the LP was NOT resolved -- pruning
+    // it anyway silently truncates the search like the depth-limit bug.
+    bool solve_failed_unresolved() const { return last_model_status != 7 && last_model_status != 8; }
 
     double obj() const {
         return Highs_getObjectiveValue(highs);
@@ -1183,6 +1204,19 @@ struct Solver {
     // has fired -- an emptied queue only means "we stopped looking",
     // not "nothing better exists".
     bool depth_limit_hit = false;
+    // See LPModel::solve_failed_unresolved(): a node dropped because HiGHS
+    // failed to reach kOptimal/kInfeasible is unresolved, not proven
+    // suboptimal -- same completeness requirement as depth_limit_hit above.
+    bool lp_solve_failure_hit = false;
+    // The outer B&C loop only checks time_limit_s between nodes -- a single
+    // node's cut-generation loop had no time check at all, so one slow node
+    // could run past the budget indefinitely (observed: 13+ hours stuck on
+    // one root node on a n=150 instance, in the sibling benchmark flow
+    // solver). This flag lets process_node bail out of its own cut loop
+    // once the overall time budget is spent, same completeness caveat as
+    // the other two flags.
+    bool time_limit_hit = false;
+    std::chrono::steady_clock::time_point t_start;
 
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
@@ -1214,12 +1248,13 @@ struct Solver {
         std::cerr << "Root LP solve returned: " << root_ok
                   << "  model_status=" << Highs_getModelStatus(root.highs)
                   << "  obj=" << (root_ok ? root.obj() : -1.0) << "\n";
+        if (!root_ok && root.solve_failed_unresolved()) lp_solve_failure_hit = true;
         root_node.ub = root_ok ? root.obj() : -std::numeric_limits<double>::infinity();
         std::cerr << "Root UB=" << root_node.ub << "  best_pts=" << best_pts << "\n";
         if (root_node.ub > best_pts) node_stack.push(std::move(root_node));
 
         int nodes = 0;
-        auto t_start = std::chrono::steady_clock::now();
+        t_start = std::chrono::steady_clock::now();
         while (!node_stack.empty() && nodes++ < 10000) {
             double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
             if (elapsed > time_limit_s) { std::cerr << "Time limit reached\n"; break; }
@@ -1227,7 +1262,7 @@ struct Solver {
             node_stack.pop();
             process_node(std::move(node), node_stack);
         }
-        proved_optimal = node_stack.empty() && nodes < 10000 && !depth_limit_hit;
+        proved_optimal = node_stack.empty() && nodes < 10000 && !depth_limit_hit && !lp_solve_failure_hit && !time_limit_hit;
         nodes_explored = nodes;
         nodes_unexplored = static_cast<int>(node_stack.size());
         // Compute best remaining upper bound from unexplored nodes
@@ -1255,11 +1290,13 @@ struct Solver {
         LPModel lp;
         lp.clone_from(root, node.fixings);
 
-        // Cut loop ΓÇö accumulate cuts, do NOT delete them between iterations
+        // Cut loop -- accumulate cuts, do NOT delete them between iterations
         for (int cut_iter = 0; cut_iter < max_cuts; ++cut_iter) {
-            if (!lp.solve()) return;
+            double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+            if (elapsed > time_limit_s) { time_limit_hit = true; return; }
+            if (!lp.solve()) { if (lp.solve_failed_unresolved()) lp_solve_failure_hit = true; return; }
             double lp_ub = lp.obj();
-            std::cerr << "LP UB: " << lp_ub << " (gap: " << (lp_ub-best_pts) << ")\n";  
+            std::cerr << "LP UB: " << lp_ub << " (gap: " << (lp_ub-best_pts) << ")\n";
             if (lp_ub <= best_pts + 1e-6) return;
 
             auto subtours = find_subtours(lp);
@@ -1274,7 +1311,7 @@ struct Solver {
                 lp.add_sec(S);
         }
 
-        if (!lp.solve()) return;
+        if (!lp.solve()) { if (lp.solve_failed_unresolved()) lp_solve_failure_hit = true; return; }
         double lp_ub = lp.obj();
         if (lp_ub <= best_pts + 1e-6) return;
 
@@ -1415,30 +1452,7 @@ struct MapResult {
     double gap_pct;
 };
 
-// rho is a physiological unknown (see paper discussion), not a value to
-// calibrate a single point estimate for. --rho-sweep runs every map once
-// per value below, writing "<name>_rho<v>.json" instead of the plain
-// output, so its effect on gaps/optimality can be read off directly rather
-// than assumed. Kept small (5 pts) since each entry re-solves the full B&C.
-static const std::vector<double> RHO_SWEEP_VALUES = {0.0, 0.25, 0.5, 0.75, 1.0};
-
-// lambda (fatigue_rate) has no clean single literature value either: no
-// study reports a pace-decay-per-vertical-metre-of-gain coefficient in a
-// directly usable form (see paper discussion). 1.75e-5 is a rough
-// order-of-magnitude anchor derived from reported end-of-race speed
-// losses (~15-20%) over a representative ultra-trail's cumulative D+
-// (~10,000m), not a fitted/cited constant -- swept rather than fixed for
-// the same reason as rho. --lambda-sweep runs every map once per value
-// below, writing "<name>_lam<v>.json".
-static const std::vector<double> LAMBDA_SWEEP_VALUES = {0.0, 1.75e-5, 1e-4, 1e-3, 5e-3, 1e-2};
-
 int main(int argc, char** argv) {
-    bool rho_sweep = false, lambda_sweep = false;
-    for (int a = 1; a < argc; ++a) {
-        if (std::string(argv[a]) == "--rho-sweep") rho_sweep = true;
-        if (std::string(argv[a]) == "--lambda-sweep") lambda_sweep = true;
-    }
-
     const std::vector<std::pair<std::string,std::string>> maps = {
     {"op_input_torremocha_standard.json",      "op_output_torremocha_standard.json"},
     {"op_input_torremocha_clustered.json",     "op_output_torremocha_clustered.json"},
@@ -1448,38 +1462,6 @@ int main(int argc, char** argv) {
     {"op_input_torremocha_sparse_far.json",    "op_output_torremocha_sparse_far.json"},
     {"op_input_torremocha_mixed_density.json", "op_output_torremocha_mixed_density.json"},
     };
-
-    if (rho_sweep) {
-        for (const auto& [in, out] : maps) {
-            for (double rho : RHO_SWEEP_VALUES) {
-                std::string suffix = "_rho" + std::to_string(rho).substr(0, 4);
-                std::string out_rho = out.substr(0, out.size() - 5) + suffix + ".json";
-                try { run_map(in, out_rho, rho); }
-                catch (const std::exception& e) {
-                    std::cerr << "Error on " << in << " (rho=" << rho << "): " << e.what() << '\n';
-                }
-            }
-        }
-        std::cerr << "\nrho sweep done: " << maps.size() << " maps x "
-                   << RHO_SWEEP_VALUES.size() << " rho values.\n";
-        return 0;
-    }
-
-    if (lambda_sweep) {
-        for (const auto& [in, out] : maps) {
-            for (double lam : LAMBDA_SWEEP_VALUES) {
-                std::string suffix = "_lam" + std::to_string(lam).substr(0, 8);
-                std::string out_lam = out.substr(0, out.size() - 5) + suffix + ".json";
-                try { run_map(in, out_lam, -1.0, lam); }
-                catch (const std::exception& e) {
-                    std::cerr << "Error on " << in << " (lambda=" << lam << "): " << e.what() << '\n';
-                }
-            }
-        }
-        std::cerr << "\nlambda sweep done: " << maps.size() << " maps x "
-                   << LAMBDA_SWEEP_VALUES.size() << " lambda values.\n";
-        return 0;
-    }
 
     // Track whether B&C hit the time limit per map via a flag set in run_map
     // We re-read the output JSON to extract results for the summary table.

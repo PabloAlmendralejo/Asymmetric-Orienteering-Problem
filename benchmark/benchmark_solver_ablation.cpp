@@ -249,6 +249,7 @@ struct LPModel {
     std::vector<double> Glow;
     std::vector<double> col_ub_cache;
     std::vector<double> sol_cache;
+    int last_model_status = 0;
     int n_cols_base = 0;
     int n_rows_base = 0;
 
@@ -626,7 +627,22 @@ struct LPModel {
     bool solve() {
         Highs_changeObjectiveSense(highs, -1);  // -1 = kHighsObjSenseMaximize
         int status = Highs_run(highs);
-        bool ok = status == 0 && Highs_getModelStatus(highs) == 7;
+        last_model_status = Highs_getModelStatus(highs);
+        bool ok = status == 0 && last_model_status == 7;
+        if (!ok && solve_failed_unresolved()) {
+            // A warm-started re-solve after adding cuts reuses the previous
+            // basis and skips presolve/rescaling -- on this model's
+            // coefficient range (matrix entries span ~1e8, mixing raw
+            // distances/costs with 0/1 columns) that can leave HiGHS unable
+            // to certify Optimal/Infeasible even when the point is
+            // numerically fine (tiny residuals). Retry once from a cleared
+            // solver state so presolve+scaling run fresh, matching what the
+            // (always-clean) root solve already does successfully.
+            Highs_clearSolver(highs);
+            status = Highs_run(highs);
+            last_model_status = Highs_getModelStatus(highs);
+            ok = status == 0 && last_model_status == 7;
+        }
         if (ok) {
             // Cache solution once so prim() is O(1)
             int nc = Highs_getNumCol(highs);
@@ -638,6 +654,15 @@ struct LPModel {
         }
         return ok;
     }
+
+    // kInfeasible (8) is the only status where dropping the node is sound --
+    // it certifies no feasible point exists in this subtree. Any other
+    // non-Optimal status (kUnknown, kTimeLimit, kIterationLimit,
+    // kSolveError, ...) means the LP was NOT resolved: the node's true bound
+    // is unknown, and pruning it anyway silently truncates the search
+    // exactly like the depth-limit bug (see max_depth/depth_limit_hit)
+    // -- so callers must flag incompleteness instead of proving optimality.
+    bool solve_failed_unresolved() const { return last_model_status != 7 && last_model_status != 8; }
 
     double obj() const {
         return Highs_getObjectiveValue(highs);
@@ -1597,6 +1622,20 @@ struct Solver {
     // exceeding max_depth is unresolved, not proven suboptimal --
     // proved_optimal must not claim completeness once this fires.
     bool depth_limit_hit = false;
+    // See LPModel::solve_failed_unresolved(): a node dropped because HiGHS
+    // failed to reach kOptimal/kInfeasible (not a genuine infeasibility
+    // certificate) is unresolved, not proven suboptimal -- same completeness
+    // requirement as depth_limit_hit above.
+    bool lp_solve_failure_hit = false;
+    // The outer B&C loop only checks time_limit_s between nodes -- a single
+    // node's cut-generation loop (separation for covers/routing/maxflow can
+    // be expensive on large instances) had no time check at all, so one
+    // slow node could run past the budget indefinitely (observed: 13+ hours
+    // stuck on one root node on a n=150 instance). This flag lets
+    // process_node bail out of its own cut loop once the overall time
+    // budget is spent, same completeness caveat as the other two flags.
+    bool time_limit_hit = false;
+    std::chrono::steady_clock::time_point t_start;
 
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
@@ -1643,12 +1682,13 @@ struct Solver {
         std::cerr << "Root LP solve returned: " << root_ok
                   << "  model_status=" << Highs_getModelStatus(root.highs)
                   << "  obj=" << (root_ok ? root.obj() : -1.0) << "\n";
+        if (!root_ok && root.solve_failed_unresolved()) lp_solve_failure_hit = true;
         root_node.ub = root_ok ? root.obj() : -std::numeric_limits<double>::infinity();
         std::cerr << "Root UB=" << root_node.ub << "  best_pts=" << best_pts << "\n";
         if (root_node.ub > best_pts) node_pq.push(std::move(root_node));
 
         int nodes = 0;
-        auto t_start = std::chrono::steady_clock::now();
+        t_start = std::chrono::steady_clock::now();
         while (!node_pq.empty() && nodes++ < 10000) {
             double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
             if (elapsed > time_limit_s) { std::cerr << "Time limit reached\n"; break; }
@@ -1657,7 +1697,7 @@ struct Solver {
             if (node.ub <= best_pts + 1e-6) continue;  // prune stale nodes
             process_node(std::move(node), node_pq);
         }
-        proved_optimal = node_pq.empty() && nodes < 10000 && !depth_limit_hit;
+        proved_optimal = node_pq.empty() && nodes < 10000 && !depth_limit_hit && !lp_solve_failure_hit && !time_limit_hit;
         if (proved_optimal) {
             best_ub = best_pts;
         } else {
@@ -1684,20 +1724,28 @@ struct Solver {
 
         // Cut loop — accumulate cuts, do NOT delete them between iterations
         for (int cut_iter = 0; cut_iter < max_cuts; ++cut_iter) {
-            if (!lp.solve()) return;
+            double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+            if (elapsed > time_limit_s) { time_limit_hit = true; return; }
+            if (!lp.solve()) { if (lp.solve_failed_unresolved()) lp_solve_failure_hit = true; return; }
             double lp_ub = lp.obj();
-            std::cerr << "LP UB: " << lp_ub << " (gap: " << (lp_ub-best_pts) << ")\n";  
+            std::cerr << "LP UB: " << lp_ub << " (gap: " << (lp_ub-best_pts) << ")\n";
             if (lp_ub <= best_pts + 1e-6) return;
 
             auto subtours = find_subtours(lp);
             auto unreachable = find_depot_unreachable(lp);
             subtours.insert(subtours.end(), unreachable.begin(), unreachable.end());
 
-            // Max-flow separation — only for no-fatigue instances (expensive, hurts fatigue instances)
+            // Max-flow separation — only for no-fatigue instances (expensive,
+            // hurts fatigue instances). Also the one observed to dominate a
+            // 13+ hour stall on a n=150 instance -- check the budget again
+            // right after it so a single slow call can't be followed by
+            // several more before the next check.
             if (inp.fatigue_rate < 1e-9) {
                 auto mf_cuts = find_maxflow_cuts(lp);
                 subtours.insert(subtours.end(), mf_cuts.begin(), mf_cuts.end());
             }
+            elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+            if (elapsed > time_limit_s) { time_limit_hit = true; return; }
 
             int cover_cuts = use_covers
                 ? find_and_add_cover_cuts(lp, inp) : 0;
@@ -1721,7 +1769,7 @@ struct Solver {
                 lp.add_sec(S);
         }
 
-        if (!lp.solve()) return;
+        if (!lp.solve()) { if (lp.solve_failed_unresolved()) lp_solve_failure_hit = true; return; }
         double lp_ub = lp.obj();
         if (lp_ub <= best_pts + 1e-6) return;
 
@@ -1889,9 +1937,12 @@ int main(int argc, char* argv[]) {
     // Parse command-line flags
     bool flag_covers = true, flag_routing = true, flag_cycle = true, flag_path = true;
     bool flag_warm_start = true;
+    double fixed_rho = -1.0, fixed_lambda = -1.0;
     for (int a = 1; a < argc; ++a) {
         std::string arg = argv[a];
-        if (arg == "--coupling=off")        g_use_tightened_coupling = false;
+        if (arg.rfind("--fixed-rho=", 0) == 0) fixed_rho = std::stod(arg.substr(12));
+        else if (arg.rfind("--fixed-lambda=", 0) == 0) fixed_lambda = std::stod(arg.substr(15));
+        else if (arg == "--coupling=off")        g_use_tightened_coupling = false;
         else if (arg == "--coupling=on")    g_use_tightened_coupling = true;
         else if (arg == "--fatigue-covers=off") g_use_fatigue_covers = false;
         else if (arg == "--fatigue-covers=on")  g_use_fatigue_covers = true;
@@ -1952,6 +2003,8 @@ int main(int argc, char* argv[]) {
         try {
             std::cerr << "\n=== " << in << " ===\n";
             Input inp = parse_input(read_file(in));
+            if (fixed_rho >= 0.0) inp.rho = fixed_rho;
+            if (fixed_lambda >= 0.0) inp.fatigue_rate = fixed_lambda;
 
             // SA
             auto t0 = std::chrono::steady_clock::now();

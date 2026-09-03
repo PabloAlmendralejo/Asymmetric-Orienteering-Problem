@@ -213,6 +213,7 @@ struct LPModel {
     std::vector<double> Ghat;
     std::vector<double> col_ub_cache;  // cached upper bounds per column
     std::vector<double> sol_cache;      // cached primal solution after each solve()
+    int last_model_status = 0;
     int n_cols_base = 0;
     int n_rows_base = 0;
 
@@ -571,7 +572,22 @@ struct LPModel {
     bool solve() {
         Highs_changeObjectiveSense(highs, -1);  // -1 = kHighsObjSenseMaximize
         int status = Highs_run(highs);
-        bool ok = status == 0 && Highs_getModelStatus(highs) == 7;
+        last_model_status = Highs_getModelStatus(highs);
+        bool ok = status == 0 && last_model_status == 7;
+        if (!ok && solve_failed_unresolved()) {
+            // A warm-started re-solve after adding cuts reuses the previous
+            // basis and skips presolve/rescaling -- on this model's
+            // coefficient range (matrix entries span ~1e8, mixing raw
+            // distances/costs with 0/1 columns) that can leave HiGHS unable
+            // to certify Optimal/Infeasible even when the point is
+            // numerically fine (tiny residuals). Retry once from a cleared
+            // solver state so presolve+scaling run fresh, matching what the
+            // (always-clean) root solve already does successfully.
+            Highs_clearSolver(highs);
+            status = Highs_run(highs);
+            last_model_status = Highs_getModelStatus(highs);
+            ok = status == 0 && last_model_status == 7;
+        }
         if (ok) {
             // Cache solution once so prim() is O(1)
             int nc = Highs_getNumCol(highs);
@@ -583,6 +599,11 @@ struct LPModel {
         }
         return ok;
     }
+
+    // kInfeasible (8) is the only status where dropping the node is sound.
+    // Any other non-Optimal status means the LP was NOT resolved -- pruning
+    // it anyway silently truncates the search like the depth-limit bug.
+    bool solve_failed_unresolved() const { return last_model_status != 7 && last_model_status != 8; }
 
     double obj() const {
         return Highs_getObjectiveValue(highs);
@@ -1423,6 +1444,20 @@ struct Solver {
     // exceeding max_depth is unresolved, not proven suboptimal --
     // proved_optimal must not claim completeness once this fires.
     bool depth_limit_hit = false;
+    // See LPModel::solve_failed_unresolved(): a node dropped because HiGHS
+    // failed to reach kOptimal/kInfeasible is unresolved, not proven
+    // suboptimal -- same completeness requirement as depth_limit_hit above.
+    bool lp_solve_failure_hit = false;
+    // The outer B&C loop only checks time_limit_s between nodes -- a single
+    // node's cut-generation loop (separation for covers/routing can be
+    // expensive on large instances) had no time check at all, so one slow
+    // node could run past the budget indefinitely (observed: 13+ hours
+    // stuck on one root node on a n=150 instance, in the sibling flow
+    // solver). This flag lets process_node bail out of its own cut loop
+    // once the overall time budget is spent, same completeness caveat as
+    // the other two flags.
+    bool time_limit_hit = false;
+    std::chrono::steady_clock::time_point t_start;
 
     bool proved_optimal = false;
     double best_ub = std::numeric_limits<double>::infinity();
@@ -1452,12 +1487,13 @@ struct Solver {
         std::cerr << "Root LP solve returned: " << root_ok
                   << "  model_status=" << Highs_getModelStatus(root.highs)
                   << "  obj=" << (root_ok ? root.obj() : -1.0) << "\n";
+        if (!root_ok && root.solve_failed_unresolved()) lp_solve_failure_hit = true;
         root_node.ub = root_ok ? root.obj() : -std::numeric_limits<double>::infinity();
         std::cerr << "Root UB=" << root_node.ub << "  best_pts=" << best_pts << "\n";
         if (root_node.ub > best_pts) node_stack.push(std::move(root_node));
 
         int nodes = 0;
-        auto t_start = std::chrono::steady_clock::now();
+        t_start = std::chrono::steady_clock::now();
         while (!node_stack.empty() && nodes++ < 10000) {
             double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
             if (elapsed > time_limit_s) { std::cerr << "Time limit reached\n"; break; }
@@ -1465,7 +1501,7 @@ struct Solver {
             node_stack.pop();
             process_node(std::move(node), node_stack);
         }
-        proved_optimal = node_stack.empty() && nodes < 10000 && !depth_limit_hit;
+        proved_optimal = node_stack.empty() && nodes < 10000 && !depth_limit_hit && !lp_solve_failure_hit && !time_limit_hit;
         if (proved_optimal) {
             best_ub = best_pts;
         } else {
@@ -1491,9 +1527,11 @@ struct Solver {
 
         // Cut loop — accumulate cuts, do NOT delete them between iterations
         for (int cut_iter = 0; cut_iter < max_cuts; ++cut_iter) {
-            if (!lp.solve()) return;
+            double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+            if (elapsed > time_limit_s) { time_limit_hit = true; return; }
+            if (!lp.solve()) { if (lp.solve_failed_unresolved()) lp_solve_failure_hit = true; return; }
             double lp_ub = lp.obj();
-            std::cerr << "LP UB: " << lp_ub << " (gap: " << (lp_ub-best_pts) << ")\n";  
+            std::cerr << "LP UB: " << lp_ub << " (gap: " << (lp_ub-best_pts) << ")\n";
             if (lp_ub <= best_pts + 1e-6) return;
 
             auto subtours = find_subtours(lp);
@@ -1511,7 +1549,7 @@ struct Solver {
                 lp.add_sec(S);
         }
 
-        if (!lp.solve()) return;
+        if (!lp.solve()) { if (lp.solve_failed_unresolved()) lp_solve_failure_hit = true; return; }
         double lp_ub = lp.obj();
         if (lp_ub <= best_pts + 1e-6) return;
 
@@ -1643,15 +1681,13 @@ struct MapResult {
 
 int main(int argc, char* argv[]) {
     std::string input_dir = "instances";
-    bool rho_sweep = false, lambda_sweep = false;
+    double fixed_rho = -1.0, fixed_lambda = -1.0;
     for (int a = 1; a < argc; ++a) {
         std::string arg = argv[a];
-        if (arg == "--rho-sweep") rho_sweep = true;
-        else if (arg == "--lambda-sweep") lambda_sweep = true;
+        if (arg.rfind("--fixed-rho=", 0) == 0) fixed_rho = std::stod(arg.substr(12));
+        else if (arg.rfind("--fixed-lambda=", 0) == 0) fixed_lambda = std::stod(arg.substr(15));
         else input_dir = arg;
     }
-    static const std::vector<double> RHO_SWEEP_VALUES = {0.0, 0.25, 0.5, 0.75, 1.0};
-    static const std::vector<double> LAMBDA_SWEEP_VALUES = {0.0, 1.75e-5, 1e-4, 1e-3, 5e-3, 1e-2};
 
     // Scan input directory for op_input_*.json files
     std::vector<std::pair<std::string,std::string>> maps;
@@ -1669,36 +1705,6 @@ int main(int argc, char* argv[]) {
     std::sort(maps.begin(), maps.end());
     std::cerr << "Found " << maps.size() << " instances in " << input_dir << "/\n";
 
-    if (rho_sweep) {
-        for (const auto& [in, out] : maps) {
-            for (double rho : RHO_SWEEP_VALUES) {
-                std::string suffix = "_rho" + std::to_string(rho).substr(0, 4);
-                std::string out_rho = out.substr(0, out.size() - 5) + suffix + ".json";
-                try { run_map(in, out_rho, rho); }
-                catch (const std::exception& e) {
-                    std::cerr << "Error on " << in << " (rho=" << rho << "): " << e.what() << '\n';
-                }
-            }
-        }
-        std::cerr << "\nrho sweep done.\n";
-        return 0;
-    }
-
-    if (lambda_sweep) {
-        for (const auto& [in, out] : maps) {
-            for (double lam : LAMBDA_SWEEP_VALUES) {
-                std::string suffix = "_lam" + std::to_string(lam).substr(0, 8);
-                std::string out_lam = out.substr(0, out.size() - 5) + suffix + ".json";
-                try { run_map(in, out_lam, -1.0, lam); }
-                catch (const std::exception& e) {
-                    std::cerr << "Error on " << in << " (lambda=" << lam << "): " << e.what() << '\n';
-                }
-            }
-        }
-        std::cerr << "\nlambda sweep done.\n";
-        return 0;
-    }
-
     auto json_val = [](const std::string& s, const std::string& key) -> double {
         std::string k = "\"" + key + "\": ";
         auto p = s.find(k);
@@ -1709,8 +1715,23 @@ int main(int argc, char* argv[]) {
 
     std::vector<MapResult> results;
 
-    for (const auto& [in, out] : maps) {
-        try { run_map(in, out); }
+    // When run with fixed overrides, tag the output filename so it doesn't
+    // collide with another solver's (or a plain baked-in-per-instance) run
+    // over the same instances/ directory.
+    std::string fixed_suffix;
+    if (fixed_lambda >= 0.0 || fixed_rho >= 0.0) fixed_suffix = "_fixedLR_mtz";
+
+    for (const auto& [in, out0] : maps) {
+        std::string out = fixed_suffix.empty() ? out0
+            : out0.substr(0, out0.size() - 5) + fixed_suffix + ".json";
+        // Resume support: this run can be interrupted (session restart,
+        // etc.) without redoing already-completed instances -- each
+        // output file is a reliable completion marker.
+        if (std::filesystem::exists(out)) {
+            std::cerr << "Skipping (already done): " << out << "\n";
+            continue;
+        }
+        try { run_map(in, out, fixed_rho, fixed_lambda); }
         catch (const std::exception& e) {
             std::cerr << "Error on " << in << ": " << e.what() << '\n';
             continue;
