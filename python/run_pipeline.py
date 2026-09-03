@@ -12,6 +12,14 @@ import time
 import numpy as np
 import random
 
+# Windows console defaults to cp1252, which can't encode the emoji used in
+# status prints below (and in core/preprocessing.py, core/pathfinding.py) --
+# force UTF-8 so a long-running preprocessing pass doesn't crash on its own
+# progress output.
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
 

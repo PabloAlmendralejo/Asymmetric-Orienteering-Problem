@@ -99,7 +99,19 @@ def get_category(sym_info):
 
 
 def parse_omap_coords_text(text):
-    """Parse OMAP coordinate text with Bezier curve tessellation."""
+    """Parse OMAP coordinate text with Bezier curve tessellation.
+
+    OpenOrienteering Mapper's native XML format stores coordinates as
+    integers in units of 1/1000 mm, not plain mm -- dividing here converts
+    to the mm used everywhere else (paper_ref_x/y, the georeferencing
+    scale math in rasterize_omap). Without this, every object landed
+    ~1000x further from the map's reference point than intended, pushing
+    all of them outside the UTM grid bounds: the whole ACR (map-symbol)
+    cost layer silently rasterized to nothing, falling back to the
+    uniform default cost everywhere (confirmed via a 0.0% non-default
+    pixel count on a real run).
+    """
+    UNITS_PER_MM = 1000.0
     raw_tokens = text.strip().replace(';', ' ').split()
     coords = []
     flags = []
@@ -116,11 +128,11 @@ def parse_omap_coords_text(text):
             if i >= len(raw_tokens):
                 return coords, flags
             tok = raw_tokens[i]
-        x = float(tok)
+        x = float(tok) / UNITS_PER_MM
         i += 1
         if i >= len(raw_tokens):
             break
-        y = float(raw_tokens[i])
+        y = float(raw_tokens[i]) / UNITS_PER_MM
         i += 1
         coords.append((x, y))
         flags.append(flag)
