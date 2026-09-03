@@ -93,25 +93,36 @@ def generate_instance(n, asymmetry=0.25, fatigue_rate=0.2,
     loss = np.zeros((total, total))
     dist_m = np.zeros((total, total))
     for i in range(total):
-        for j in range(total):
-            if i == j:
-                continue
+        for j in range(i + 1, total):
             dx = coords[j, 0] - coords[i, 0]
             dy = coords[j, 1] - coords[i, 1]
             base_dist = np.sqrt(dx ** 2 + dy ** 2)
 
-            # Directional asymmetry: "uphill" (positive dy) costs more
+            # Terrain noise (10%) -- drawn ONCE per unordered pair {i,j} and
+            # shared by both directions. Previously drawn independently per
+            # ordered pair (inside a full i,j double loop), which left ~7%
+            # asymmetry even at asymmetry=0.0 (confirmed via this function's
+            # own actual_asymmetry_pct diagnostic on the "symmetric_easy"
+            # instances) -- asymmetry=0.0 must give a genuinely symmetric cm.
+            terrain_noise = 1.0 + rng.uniform(-0.1, 0.1)
+
+            # i -> j: "uphill" (positive dy) costs more
             slope_factor = dy / max(base_dist, 1e-9)
             asym_mult = 1.0 + asymmetry * slope_factor
-
-            # Terrain noise (10%)
-            terrain_noise = 1.0 + rng.uniform(-0.1, 0.1)
             cm[i, j] = base_dist * max(asym_mult * terrain_noise, 0.2)
-
             dz = asymmetry * dy  # synthetic "elevation" proxy, same units as slope_factor*base_dist
             gain[i, j] = max(dz, 0.0)
             loss[i, j] = max(-dz, 0.0)
             dist_m[i, j] = base_dist  # raw horizontal distance for the mu*dist fatigue term
+
+            # j -> i: opposite slope direction, same base distance & noise
+            slope_factor_ji = -slope_factor
+            asym_mult_ji = 1.0 + asymmetry * slope_factor_ji
+            cm[j, i] = base_dist * max(asym_mult_ji * terrain_noise, 0.2)
+            dz_ji = -dz
+            gain[j, i] = max(dz_ji, 0.0)
+            loss[j, i] = max(-dz_ji, 0.0)
+            dist_m[j, i] = base_dist
 
     # Budget from nearest-neighbor estimate
     nn_cost = _nearest_neighbor_cost(cm, n)
@@ -241,7 +252,7 @@ def generate_all(output_dir='instances'):
     manifest_path = os.path.join(output_dir, 'manifest.json')
     with open(manifest_path, 'w') as f:
         json.dump(manifest, f, indent=2)
-    print(f"\n✅ Generated {len(manifest)} instances in {output_dir}/")
+    print(f"\nGenerated {len(manifest)} instances in {output_dir}/")
     print(f"   Manifest: {manifest_path}")
     return manifest
 
