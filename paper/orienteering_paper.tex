@@ -413,15 +413,18 @@ We therefore retain only the base-cost filter~\eqref{eq:arcelim}; it is a conser
 \paragraph{Fatigue-state bounds $\hat{G}_i$ and $\check{G}_i$.}
 Both formulations below need a valid upper bound $\hat{G}_i$ on the (unclipped) fatigue state reachable at $i$, to size big-$M$ constants and McCormick/coupling bounds---the role $B - C_{0i} - C_{j0}$ played for arrival times in the original model.
 Unlike elapsed cost, $\psi_{ij}$ can be negative, so the surviving-arc graph (\cref{eq:arcelim}) weighted by $\psi$ can contain positive-weight cycles, making the longest-walk problem that would naturally define $\hat{G}_i$ NP-hard in general.
-We instead compute $\hat{G}_i$ by a Bellman--Ford relaxation in the $(\max, +)$ semiring, capped at $n-1$ rounds:
+We instead compute $\hat{G}_i$ by a Bellman--Ford relaxation in the $(\max, +)$ semiring, capped at $n-1$ rounds, clipping the running state to 0 after \emph{every} round rather than once at the end:
 \begin{equation}
-  \hat{G}_i = \max\Bigl(0,\ \max_{\substack{\text{walks } 0 \to i \\ \text{of length} \leq n-1}} \sum_{\text{legs}} \psi\Bigr)
+  \hat{G}_i^{(0)} = \begin{cases} 0 & i = 0 \\ -\infty & \text{otherwise} \end{cases}, \qquad
+  \hat{G}_i^{(k)} = \max\Bigl(\hat{G}_i^{(k-1)},\ \max_{(u,i) \in A} \max\bigl(0,\ \hat{G}_u^{(k-1)} + \psi_{ui}\bigr)\Bigr), \qquad
+  \hat{G}_i \coloneqq \hat{G}_i^{(n-1)}
   \label{eq:ghat}
 \end{equation}
+Clipping at every round, not just the final one, is necessary because the true recurrence~\eqref{eq:fatigue_clip} clips at every node: a walk can ``reset'' mid-route (e.g.\ $\psi = -100$ then $+50$ yields true state $50$, not the raw two-leg sum $-50$), so clipping only the aggregate at the end can under-estimate the true reachable state whenever some arc has $\psi_{ij} < 0$, i.e.\ whenever $\rho > 0$---an invalid (too-low) bound rather than merely a loose one.
 Any \emph{simple} path through the $n+1$ nodes has at most $n-1$ arcs, so capping the relaxation at $n-1$ rounds is a superset of all simple-path sums---the bound remains valid regardless of cycle sign, and the relaxation is well-defined (no divergence) despite positive cycles, since we simply stop before they can be exploited.
-An analogous $\check{G}_i$, a valid \emph{lower} bound needed only by Formulation~B (below), is computed the same way with a $(\min,+)$ relaxation.
+An analogous $\check{G}_i$, a valid \emph{lower} bound needed only by Formulation~B (below), is computed the same way with a $(\min,+)$ relaxation; no per-round clipping is needed there; because $\check{G}_i$ is a minimum over walks and the true state is always $\geq 0$, the raw (unclipped) minimum-weight walk from the depot is already a valid lower bound on the clipped state of any route sharing that walk, regardless of the sign of $\psi$.
 Both run in $O(n^3)$ (\,$O(n^2)$ arcs $\times$ $O(n)$ rounds), trivial for the instance sizes here.
-$\hat{G}_i$ and $\check{G}_i$ are constructed to be valid bounds for the LP relaxation's own state variables (defined below); the route an accepted solution actually reports is always re-checked directly against the exact clipped model~\eqref{eq:fatigue_clip} before being output; see \cref{sec:discussion} for further remarks on the relationship between the two.
+$\hat{G}_i$ and $\check{G}_i$ are constructed to be valid bounds for the LP relaxation's own state variables (defined below) for any $\rho$, including $\rho = 0$ as fixed in \cref{sec:experiments} (where $\psi_{ij} \geq 0$ identically, making the per-round clip a no-op); the route an accepted solution actually reports is always re-checked directly against the exact clipped model~\eqref{eq:fatigue_clip} before being output; see \cref{sec:discussion} for further remarks on the relationship between the two.
 
 \subsection{Formulation A: MTZ with McCormick Linearisation}
 \label{sec:formulation_mtz}

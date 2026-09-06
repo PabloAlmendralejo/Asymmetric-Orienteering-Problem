@@ -46,14 +46,6 @@ coupling bound (`Ĝ_i` and `Ǧ_i`) where the original model only needed one.
 
 ### Known gaps
 
-- **B2/B3 tightness**: the routing-infeasibility (B2) and cycle-cover (B3) cut
-  proofs carry over unchanged from the old model (they're stated purely in
-  terms of the AOPF's feasibility definition), but whether the LP's
-  `Ĝ_i`/`Ǧ_i` bounds are always tight relative to the true clipped fatigue
-  state is not rigorously proven. This doesn't affect the correctness of any
-  reported route — every output is independently re-validated against the
-  exact clipped model — only the tightness/completeness of the LP relaxation
-  itself.
 - **Terrain diversity**: validated on two Spanish terrains (Torremocha,
   La Muela). Torremocha's IQR-based cost-fusion scaling is degenerate
   (`c = 0.00`, see Sec. 8 of the paper) because its own ACR cost distribution

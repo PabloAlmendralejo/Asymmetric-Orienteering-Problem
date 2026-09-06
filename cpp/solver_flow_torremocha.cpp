@@ -232,7 +232,15 @@ static std::vector<double> compute_fatigue_bounds(const Input& inp, double rho) 
             int i = int(a[0]), j = int(a[1]);
             double psi = a[2];
             if (g[i] <= NEG_INF / 2) continue;  // i not yet reachable
-            double cand = g[i] + psi;
+            // Clip HERE, every round -- not just once at the end. The true
+            // recurrence is F_j = max(0, F_i + psi_ij), clipped at EVERY
+            // node; clipping only the final answer misses that a route can
+            // "reset" mid-walk (e.g. psi -100 then +50 gives true state 50,
+            // not raw-sum -50) -- see compute_fatigue_lower_bounds' comment
+            // and paper Sec 3 for the fix rationale (harmless when rho=0,
+            // since psi=phi+ + mu*dist >= 0 always then, but required for
+            // soundness whenever rho>0 makes psi_ij negative).
+            double cand = std::max(0.0, g[i] + psi);
             if (cand > g[j] + 1e-12) { g[j] = cand; changed = true; }
         }
         if (!changed) break;
@@ -240,11 +248,9 @@ static std::vector<double> compute_fatigue_bounds(const Input& inp, double rho) 
 
     // Nodes never reached by any budget-admissible arc keep NEG_INF; clip to
     // 0 (they simply won't get a fatigue-flow column with positive width,
-    // see LPModel::build()). Also clip negative results to 0: a "worst case"
-    // that is net-negative just means the tightest valid bound is 0 (fatigue
-    // state cannot itself go below 0 once we reintroduce the clip at solve
-    // time -- see route_fatigue_cost_clipped for the *exact*, clipped
-    // version used to validate a concrete candidate route).
+    // see LPModel::build()). Real reachable nodes are already correctly
+    // clipped by the per-round clip inside the loop above, so this is only
+    // a safety net for the unreached case.
     for (int i = 0; i < n; ++i) g[i] = std::max(g[i], 0.0);
     return g;
 }

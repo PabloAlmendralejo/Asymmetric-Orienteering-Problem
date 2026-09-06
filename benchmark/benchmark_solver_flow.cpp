@@ -176,7 +176,12 @@ static std::vector<double> compute_fatigue_bounds(const Input& inp, double rho) 
             int i = int(a[0]), j = int(a[1]);
             double psi = a[2];
             if (g[i] <= NEG_INF / 2) continue;
-            double cand = g[i] + psi;
+            // Clip every round, not just once at the end -- see
+            // cpp/solver_flow_torremocha.cpp's compute_fatigue_bounds
+            // comment for why single-end-clip is unsound when psi can be
+            // negative (rho>0); harmless no-op when rho=0 as in this
+            // paper's runs.
+            double cand = std::max(0.0, g[i] + psi);
             if (cand > g[j] + 1e-12) { g[j] = cand; changed = true; }
         }
         if (!changed) break;
