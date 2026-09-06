@@ -44,19 +44,6 @@ McCormick (MTZ) and flow-coupling constraints — see Sec. 3 of the paper for
 the full formulation, including why the flow formulation needs a *two-sided*
 coupling bound (`Ĝ_i` and `Ǧ_i`) where the original model only needed one.
 
-### Known gaps
-
-- **Terrain diversity**: validated on two Spanish terrains (Torremocha,
-  La Muela). Torremocha's IQR-based cost-fusion scaling is degenerate
-  (`c = 0.00`, see Sec. 8 of the paper) because its own ACR cost distribution
-  has near-zero spread — HCR morphometry effectively carries the whole
-  combined-cost signal there, unlike La Muela (`c = 1.09`).
-- **No modern exact-OP baseline**: compared only against a classical
-  (undirected, symmetric, fatigue-free) Fischetti et al. (1998) baseline
-  (`benchmark/solver_op_classical.cpp`). A modern exact OP solver such as
-  Kobeaga et al. (2021) would need IBM CPLEX, which has no Windows ARM64
-  build (this development machine's architecture) — out of scope for now.
-
 ## Project Structure
 
 ```

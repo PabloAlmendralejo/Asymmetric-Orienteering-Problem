@@ -413,18 +413,47 @@ We therefore retain only the base-cost filter~\eqref{eq:arcelim}; it is a conser
 \paragraph{Fatigue-state bounds $\hat{G}_i$ and $\check{G}_i$.}
 Both formulations below need a valid upper bound $\hat{G}_i$ on the (unclipped) fatigue state reachable at $i$, to size big-$M$ constants and McCormick/coupling bounds---the role $B - C_{0i} - C_{j0}$ played for arrival times in the original model.
 Unlike elapsed cost, $\psi_{ij}$ can be negative, so the surviving-arc graph (\cref{eq:arcelim}) weighted by $\psi$ can contain positive-weight cycles, making the longest-walk problem that would naturally define $\hat{G}_i$ NP-hard in general.
-We instead compute $\hat{G}_i$ by a Bellman--Ford relaxation in the $(\max, +)$ semiring, capped at $n-1$ rounds, clipping the running state to 0 after \emph{every} round rather than once at the end:
+We instead compute $\hat{G}_i$ by a Bellman--Ford relaxation in the $(\max, +)$ semiring, capped at $n$ rounds, clipping the running state to 0 after \emph{every} round rather than once at the end:
 \begin{equation}
   \hat{G}_i^{(0)} = \begin{cases} 0 & i = 0 \\ -\infty & \text{otherwise} \end{cases}, \qquad
   \hat{G}_i^{(k)} = \max\Bigl(\hat{G}_i^{(k-1)},\ \max_{(u,i) \in A} \max\bigl(0,\ \hat{G}_u^{(k-1)} + \psi_{ui}\bigr)\Bigr), \qquad
-  \hat{G}_i \coloneqq \hat{G}_i^{(n-1)}
+  \hat{G}_i \coloneqq \hat{G}_i^{(n)}
   \label{eq:ghat}
 \end{equation}
 Clipping at every round, not just the final one, is necessary because the true recurrence~\eqref{eq:fatigue_clip} clips at every node: a walk can ``reset'' mid-route (e.g.\ $\psi = -100$ then $+50$ yields true state $50$, not the raw two-leg sum $-50$), so clipping only the aggregate at the end can under-estimate the true reachable state whenever some arc has $\psi_{ij} < 0$, i.e.\ whenever $\rho > 0$---an invalid (too-low) bound rather than merely a loose one.
-Any \emph{simple} path through the $n+1$ nodes has at most $n-1$ arcs, so capping the relaxation at $n-1$ rounds is a superset of all simple-path sums---the bound remains valid regardless of cycle sign, and the relaxation is well-defined (no divergence) despite positive cycles, since we simply stop before they can be exploited.
-An analogous $\check{G}_i$, a valid \emph{lower} bound needed only by Formulation~B (below), is computed the same way with a $(\min,+)$ relaxation; no per-round clipping is needed there; because $\check{G}_i$ is a minimum over walks and the true state is always $\geq 0$, the raw (unclipped) minimum-weight walk from the depot is already a valid lower bound on the clipped state of any route sharing that walk, regardless of the sign of $\psi$.
+Any \emph{simple} path through the $n+1$ nodes has at most $n$ arcs, so capping the relaxation at $n$ rounds is a superset of all simple-path sums---the bound remains valid regardless of cycle sign, and the relaxation is well-defined (no divergence) despite positive cycles, since we simply stop before they can be exploited.
+An analogous $\check{G}_i$, a valid \emph{lower} bound needed only by Formulation~B (below), is computed the same way with a $(\min,+)$ relaxation, but \emph{without} the per-round clip (\cref{prop:ghat} below shows why one is needed for $\hat{G}_i$ but not $\check{G}_i$).
 Both run in $O(n^3)$ (\,$O(n^2)$ arcs $\times$ $O(n)$ rounds), trivial for the instance sizes here.
-$\hat{G}_i$ and $\check{G}_i$ are constructed to be valid bounds for the LP relaxation's own state variables (defined below) for any $\rho$, including $\rho = 0$ as fixed in \cref{sec:experiments} (where $\psi_{ij} \geq 0$ identically, making the per-round clip a no-op); the route an accepted solution actually reports is always re-checked directly against the exact clipped model~\eqref{eq:fatigue_clip} before being output; see \cref{sec:discussion} for further remarks on the relationship between the two.
+The route an accepted solution actually reports is always re-checked directly against the exact clipped model~\eqref{eq:fatigue_clip} before being output, independently of the bounds below.
+
+For a walk $w = (v_0{=}0, v_1, \ldots, v_k)$ in the surviving-arc graph, write $S_l(w) = \sum_{h=1}^{l} \psi_{v_{h-1}v_h}$ for its raw (unclipped) partial sum and $F_l(w)$ for the value of the true clipped recurrence~\eqref{eq:fatigue_clip} applied along $w$ ($F_0(w)=0$, $F_l(w) = \max(0, F_{l-1}(w) + \psi_{v_{l-1}v_h})$).
+
+\begin{proposition}[Validity of the fatigue-state bounds]
+\label{prop:ghat}
+For every walk $w$ of length $k \leq n$ from $0$ to $i$ in the surviving-arc graph:
+\textup{(a)} $F_k(w) \leq \hat{G}_i^{(k)} \leq \hat{G}_i$, and
+\textup{(b)} $\check{G}_i \leq S_k(w) \leq F_k(w)$.
+Consequently, for any simple route reaching $i$ (which, visiting at most all $n+1$ nodes, has at most $n$ arcs), its true clipped fatigue state lies in $[\check{G}_i, \hat{G}_i]$.
+\end{proposition}
+
+\begin{proof}
+We first record two facts about the clipped recurrence.
+
+\emph{Suffix-max identity.} $F_k(w) = \max_{0 \leq m \leq k} \bigl(S_k(w) - S_m(w)\bigr)$, by induction on $k$: the base case $k=0$ is $F_0=0=S_0-S_0$; for the step, $F_k(w) = \max(0, F_{k-1}(w) + \psi_{v_{k-1}v_k}) = \max\bigl(0,\ \max_{0\leq m \leq k-1}(S_{k-1}(w)-S_m(w)) + \psi_{v_{k-1}v_k}\bigr) = \max_{0\leq m\leq k}(S_k(w)-S_m(w))$, using $S_{k-1}(w)+\psi_{v_{k-1}v_k}=S_k(w)$ and folding the outer $\max(0,\cdot)$ in as the $m=k$ (empty-suffix) term.
+
+\emph{Monotonicity.} $x \mapsto \max(0, x+\psi)$ is non-decreasing in $x$ for fixed $\psi$, immediately from $x_1 \le x_2 \Rightarrow x_1+\psi \le x_2+\psi$.
+
+\textbf{(a)} By induction on $k$, simultaneously over all nodes. Base case $k=0$: the only length-0 walk is the trivial one at $0$, and $F_0=0=\hat{G}_0^{(0)}$. Step: let $w$ end at $i=v_k$ via arc $(u,i)$ with $u=v_{k-1}$, and let $w'$ be its length-$(k-1)$ prefix. By the induction hypothesis $F_{k-1}(w') \leq \hat{G}_u^{(k-1)}$, so by monotonicity
+\[
+F_k(w) = \max\bigl(0,\ F_{k-1}(w') + \psi_{ui}\bigr) \leq \max\bigl(0,\ \hat{G}_u^{(k-1)} + \psi_{ui}\bigr) \leq \hat{G}_i^{(k)},
+\]
+the last step because $\hat{G}_i^{(k)}$'s defining maximum includes exactly this term (arc $(u,i)$ is present since $w$ uses it). Since $\hat{G}_i^{(k)}$ is non-decreasing in $k$ by construction (each round takes a max with the previous value), $\hat{G}_i^{(k)} \leq \hat{G}_i^{(n)} = \hat{G}_i$.
+
+\textbf{(b)} By the suffix-max identity with $m=0$: $F_k(w) \geq S_k(w) - S_0(w) = S_k(w)$. Since $\check{G}_i$ is a minimum over all walks $0 \to i$ of length $\leq n$ (including $w$ itself), $\check{G}_i \leq S_k(w)$. Chaining the two gives $\check{G}_i \leq S_k(w) \leq F_k(w)$; note this holds for \emph{any} sign pattern of $\psi$, with no clipping needed in the $\check{G}_i$ recursion.
+\end{proof}
+
+Part (a) is why the per-round clip in~\eqref{eq:ghat} is not optional: the single-end-clip construction used in an earlier version of this derivation, $\hat{G}_i^{\text{naive}} = \max(0, \max_w S_k(w))$, only ever instantiates the suffix-max identity's $m=0$ term, and can under-shoot $F_k(w)$ whenever the identity's true maximiser is some $m^*>0$---concretely, two consecutive arcs with $\psi=-100$ then $\psi=+50$ give $F_2=\max(0,\max(0,-100)+50)=50$ but $S_2=-50$, so $\hat{G}^{\text{naive}}=\max(0,-50)=0 < 50$, an invalid (too-low) upper bound rather than merely a loose one.
+This failure mode requires some arc with $\psi_{ij}<0$, i.e.\ $\rho>0$; under the fixed calibration $\rho=0$ used throughout this paper's experiments (\cref{sec:experiments}), $\psi_{ij} = \phi^+_{ij} + \mu\,\delta_{ij} \geq 0$ identically, so every clip in~\eqref{eq:ghat} is a no-op and $\hat{G}_i^{\text{naive}}=\hat{G}_i$---confirmed empirically by re-running affected instances under both constructions and observing identical accepted solutions. Part (b) shows $\check{G}_i$ needed no such fix: being a minimum, its raw (unclipped) value is already bounded above by the true state along any walk sharing it, for either sign of $\psi$.
 
 \subsection{Formulation A: MTZ with McCormick Linearisation}
 \label{sec:formulation_mtz}
