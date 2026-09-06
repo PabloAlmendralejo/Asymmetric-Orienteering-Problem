@@ -16,7 +16,7 @@ This creates 66 instances (3 seeds per configuration) varying:
 - Budget tightness: the budget B is set to 70% (loose), 50% (medium), or 30% (tight) of the nearest-neighbour tour cost
 - Plus 6 extreme/boundary cases and 2 extra size×asymmetry combinations outside the main sweeps
 
-All instances are solved at the same fixed `λ = 4.1e-5`, `ρ = 0` (see the top-level README's "Fatigue Model" section for the calibration sources) rather than swept per instance — an earlier version of this suite also varied a nominal fatigue rate per instance, but that dimension no longer reflects a real experimental contrast once λ/ρ are fixed, so it isn't a reported results axis.
+All instances are solved at the same fixed `λ = 4.1e-5`, `ρ = 0` (see the top-level README's "Fatigue Model" section for the calibration sources) rather than swept per instance. Instance file names additionally encode a nominal fatigue-rate label from generation, but since every instance is solved at the same λ/ρ regardless of that label, it isn't a reported results axis.
 
 ## Solvers
 

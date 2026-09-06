@@ -18,11 +18,10 @@ The pipeline has two stages:
 
 ## Fatigue Model
 
-The original linear model, `f(t) = 1 + λt/B`, is provably order-invariant (the
+A naive linear model, `f(t) = 1 + λt/B`, is provably order-invariant (the
 same set of arcs gives the same total fatigue cost regardless of visit order),
-which collapses the problem to a much simpler one — this was the central
-objection in EJOR-D-26-01706's review. It's replaced by a per-node fatigue
-*state* `G_i`, propagated arc-by-arc:
+which would collapse the problem to a much simpler one. Instead, this
+framework uses a per-node fatigue *state* `G_i`, propagated arc-by-arc:
 
 ```
 ψ_ij = φ+_ij − ρ·φ-_ij + μ·δ_ij
@@ -173,10 +172,10 @@ Instances vary across:
 - Budget tightness: loose (70%), medium (50%), tight (30%) of NN tour cost
 
 All instances are solved at the same fixed `λ = 4.1×10⁻⁵`, `ρ = 0` (see
-"Fatigue Model" above) — an earlier version of this suite also varied a
-nominal fatigue rate per instance and swept `λ`/`ρ` per run, but that
-dimension no longer reflects a real experimental contrast under the fixed
-calibration, so it isn't reported as a separate results axis.
+"Fatigue Model" above); instance file names additionally encode a nominal
+fatigue-rate label from generation, but since every instance is solved at
+the same `λ`/`ρ` regardless of that label, it isn't reported as a separate
+results axis.
 
 A classical (undirected, symmetric, fatigue-free) OP baseline
 (`solver_op_classical.cpp`, per Fischetti et al. 1998) and a heuristic

@@ -307,12 +307,11 @@ The resulting matrix satisfies $C_{ij} \neq C_{ji}$ in general, with asymmetry m
 \subsection{Cumulative Fatigue Model}
 \label{sec:fatigue}
 
-\paragraph{Revision note.}
-An earlier version of this model defined fatigue as $f(t) = 1 + \lambda\, t/B$, a multiplier driven purely by cumulative \emph{base cost} $t$ (i.e.\ elapsed effort, in the same units as $B$).
-That model is provably order-invariant: expanding the total fatigue-adjusted cost of a route algebraically collapses to $S + (\lambda/2B)(S^2 - Q)$, where $S = \sum_\ell C_\ell$ and $Q = \sum_\ell C_\ell^2$ over the route's legs---a function of the \emph{multiset} of arcs used, independent of visit order.
-Consequently the AOPF as originally posed reduces to a classical Orienteering Problem with a nonlinear (quadratic) budget, and none of the arrival-time machinery in \cref{sec:formulation} (McCormick linearisation, flow-based time tracking, position-dependent cuts) is actually necessary to solve it.
-The model below replaces the elapsed-cost multiplier with a per-node \emph{fatigue state} driven by the terrain actually traversed---elevation gain, elevation loss, and distance---which breaks this collapse (\cref{sec:order-dependence}).
-\Cref{sec:formulation} (including its cutting-plane subsections) still describes the arrival-time formulation built for the original (collapsing) model; adapting it to the state-based model below is future work (\cref{sec:discussion}).
+\paragraph{Why not a simple elapsed-cost multiplier.}
+A natural first attempt defines fatigue as $f(t) = 1 + \lambda\, t/B$, a multiplier driven purely by cumulative \emph{base cost} $t$ (i.e.\ elapsed effort, in the same units as $B$).
+This model is provably order-invariant: expanding the total fatigue-adjusted cost of a route algebraically collapses to $S + (\lambda/2B)(S^2 - Q)$, where $S = \sum_\ell C_\ell$ and $Q = \sum_\ell C_\ell^2$ over the route's legs---a function of the \emph{multiset} of arcs used, independent of visit order.
+Consequently, under this multiplier the AOPF reduces to a classical Orienteering Problem with a nonlinear (quadratic) budget, and none of the arrival-time machinery in \cref{sec:formulation} (McCormick linearisation, flow-based time tracking, position-dependent cuts) would actually be necessary to solve it.
+The model below instead defines a per-node \emph{fatigue state} driven by the terrain actually traversed---elevation gain, elevation loss, and distance---which breaks this collapse (\cref{sec:order-dependence}); \cref{sec:formulation} is built around this state-based model throughout.
 
 \paragraph{Fatigue state.}
 Rather than a single scalar elapsed-cost fraction, we track a per-node fatigue state, accumulated along the path actually taken to reach $i$.
@@ -452,7 +451,7 @@ the last step because $\hat{G}_i^{(k)}$'s defining maximum includes exactly this
 \textbf{(b)} By the suffix-max identity with $m=0$: $F_k(w) \geq S_k(w) - S_0(w) = S_k(w)$. Since $\check{G}_i$ is a minimum over all walks $0 \to i$ of length $\leq n$ (including $w$ itself), $\check{G}_i \leq S_k(w)$. Chaining the two gives $\check{G}_i \leq S_k(w) \leq F_k(w)$; note this holds for \emph{any} sign pattern of $\psi$, with no clipping needed in the $\check{G}_i$ recursion.
 \end{proof}
 
-Part (a) is why the per-round clip in~\eqref{eq:ghat} is not optional: the single-end-clip construction used in an earlier version of this derivation, $\hat{G}_i^{\text{naive}} = \max(0, \max_w S_k(w))$, only ever instantiates the suffix-max identity's $m=0$ term, and can under-shoot $F_k(w)$ whenever the identity's true maximiser is some $m^*>0$---concretely, two consecutive arcs with $\psi=-100$ then $\psi=+50$ give $F_2=\max(0,\max(0,-100)+50)=50$ but $S_2=-50$, so $\hat{G}^{\text{naive}}=\max(0,-50)=0 < 50$, an invalid (too-low) upper bound rather than merely a loose one.
+Part (a) is why the per-round clip in~\eqref{eq:ghat} is not optional: a naive single-end-clip construction, $\hat{G}_i^{\text{naive}} = \max(0, \max_w S_k(w))$, only ever instantiates the suffix-max identity's $m=0$ term, and can under-shoot $F_k(w)$ whenever the identity's true maximiser is some $m^*>0$---concretely, two consecutive arcs with $\psi=-100$ then $\psi=+50$ give $F_2=\max(0,\max(0,-100)+50)=50$ but $S_2=-50$, so $\hat{G}^{\text{naive}}=\max(0,-50)=0 < 50$, an invalid (too-low) upper bound rather than merely a loose one.
 This failure mode requires some arc with $\psi_{ij}<0$, i.e.\ $\rho>0$; under the fixed calibration $\rho=0$ used throughout this paper's experiments (\cref{sec:experiments}), $\psi_{ij} = \phi^+_{ij} + \mu\,\delta_{ij} \geq 0$ identically, so every clip in~\eqref{eq:ghat} is a no-op and $\hat{G}_i^{\text{naive}}=\hat{G}_i$---confirmed empirically by re-running affected instances under both constructions and observing identical accepted solutions. Part (b) shows $\check{G}_i$ needed no such fix: being a minimum, its raw (unclipped) value is already bounded above by the true state along any walk sharing it, for either sign of $\psi$.
 
 \subsection{Formulation A: MTZ with McCormick Linearisation}
@@ -978,7 +977,7 @@ One exception with both a citable source and a metric closer in spirit to $F_i$ 
 
 As a rough order-of-magnitude anchor---not a calibrated constant---we use \citeauthor{jaencarrillo2025}'s race, where both $D^+$ and total distance are known, and compute $F$ via \cref{eq:psi}: $F = \varphi^+ - \rho\,\varphi^- + \mu\,\delta \approx 3{,}132 - 0.5(3{,}132) + 0.067(44{,}600) \approx 4{,}568$, and $1+\lambda F \approx 1.187$ at that $F$ gives $\lambda \approx 4.1 \times 10^{-5}$.
 Given the absence of a defensible point estimate, this anchor---not a fitted or cited constant---is the value we fix $\lambda$ to for all experiments reported below, rather than reporting results at an arbitrarily chosen number.
-For reference, the original model's $\lambda=0.2$ inflates the mean fatigue-to-base-cost ratio to $22.8\times$ (max $36.5\times$) on the synthetic benchmark suite once expressed in the revised units---confirmation that it is not a value to carry forward, only a historical anchor for \cref{sec:results}'s pre-rework figures.
+For reference, the original model's $\lambda=0.2$ inflates the mean fatigue-to-base-cost ratio to $22.8\times$ (max $36.5\times$) on the synthetic benchmark suite once expressed in the revised units---confirmation that it is not a value to carry forward under the state-based model.
 
 $\rho$ (the downhill-recovery fraction in \cref{eq:psi}) we fix to $\rho = 0$: the literature we found leans toward no net recovery rather than a neutral midpoint---\citet{vernillo2015} measured energy cost before and after a mountain ultramarathon in 14 trail runners and found downhill running cost \emph{increased} by $13.1\%$ post-race, with no significant change on level or uphill terrain, evidence against net metabolic recovery on descents once fatigue has accumulated, not for it.
 $\mu$ (the distance-to-elevation weight, \cref{eq:mu}) is derived rather than assumed, since it follows directly from the Minetti curve already used for $C_{ij}$; for the terrain parameters in this study it evaluates to $\mu \approx 0.067$ (equivalently, $\sim$14.9 horizontal metres per vertical-metre-equivalent).}
@@ -1048,10 +1047,9 @@ On this harder, more asymmetric terrain, the pattern reverses from Torremocha: M
 Where flow does not prove optimality, however, its gaps are consistently at or below MTZ's (Standard: $4.9\%$ vs.\ $16.5\%$; Clustered: $2.1\%$ vs.\ proven; Elev-biased: $24.2\%$ vs.\ $24.8\%$; Mixed-density: $24.4\%$ vs.\ $24.9\%$), so the tighter relaxation still shows up as tighter bounds even on the instances it does not close.
 Elev-biased and Mixed-density remain hard for both formulations (gaps above $24\%$), suggesting the difficulty here is intrinsic to those control-point distributions on this terrain rather than a formulation weakness.
 
-Across both terrains (14 instances total), MTZ proves 10 of 14 instances optimal versus 9 for flow, reversing the direction reported in earlier (pre-rework) results.
-That earlier comparison is not on the same footing as this one: it predates a fix to the terrain cost pipeline itself (a coordinate-scaling bug that left the ACR map-symbol cost layer flat, \cref{sec:discussion}), so the earlier runs solved a materially different, less realistic cost surface, not just a different code revision of the same instances.
+Across both terrains (14 instances total), MTZ proves 10 of 14 instances optimal versus 9 for flow.
 The mean LP-relaxation gap on the unproven instances is nonetheless lower for flow ($4.81\%$ across the 5 unproven instances) than for MTZ ($5.57\%$ across the 5 unproven instances), so flow's tighter relaxation remains visible in the bound quality even where it proves fewer instances outright.
-This is a more qualified result than the flow formulation being uniformly better, and we report it as such rather than the stronger claim the pre-rework results supported.
+This is a more qualified result than the flow formulation being uniformly better, and we report it as such.
 
 \subsection{Synthetic Benchmark Instances}
 \label{sec:benchmark}
@@ -1070,9 +1068,9 @@ Scores are correlated with distance from the depot (10--50 points, rounded to mu
 All instances and the solver are released as part of the benchmark suite.
 Note that the synthetic asymmetry is spatially uncorrelated, unlike real terrain where slope-induced cost differences exhibit spatial autocorrelation; the real-terrain experiments on Torremocha and La Muela complement the benchmark by testing the solver on naturally structured asymmetry.
 
-An earlier version of this suite also varied a nominal fatigue rate across instances and swept $\lambda$ and $\rho$ per instance to find the tightest reported gap.
-Following the fixed-calibration policy adopted in \cref{sec:experiments} ($\lambda = 4.1\times10^{-5}$ from \citet{jaencarrillo2025}, $\rho = 0$ from \citet{vernillo2015}, applied uniformly), every instance below---including those whose file names still encode a nominal fatigue-rate label from the original generation script---is solved at the same $\lambda$ and $\rho$.
-We therefore no longer report a fatigue-rate sweep: it would not reflect a real experimental contrast, since all instances share one $\lambda$ regardless of label.
+Instance file names additionally encode a nominal fatigue-rate label (\texttt{f00}/\texttt{f10}/\texttt{f20}/\texttt{f30}) from the generation script.
+Following the fixed-calibration policy adopted in \cref{sec:experiments} ($\lambda = 4.1\times10^{-5}$ from \citet{jaencarrillo2025}, $\rho = 0$ from \citet{vernillo2015}, applied uniformly), every instance below is solved at the same $\lambda$ and $\rho$ regardless of this label.
+We therefore do not report a fatigue-rate sweep as a separate results axis: it would not reflect a real experimental contrast, since all instances share one $\lambda$.
 
 \subsection{Benchmark Results}
 
@@ -1212,7 +1210,7 @@ Each configuration adds one cut family to the previous one, using the same SA wa
 
 Across the larger, more diverse 66-instance suite, no cut family improves both the mean gap and the number of proven-optimal instances simultaneously---the pattern is not monotonic, and we report it as such rather than picking whichever single metric looks best.
 The base configuration proves 24 of 66 instances optimal with a mean gap of 13.29\%.
-Adding B1 (lifted cover cuts) proves one fewer instance (23/66) and increases the mean gap to 14.64\%, consistent with the cover-separation overhead outweighing its tightening effect on this suite, as it did on a smaller, pre-rework version of this benchmark.
+Adding B1 (lifted cover cuts) proves one fewer instance (23/66) and increases the mean gap to 14.64\%, consistent with the cover-separation overhead outweighing its tightening effect on this suite.
 B2 (routing infeasibility cuts) recovers ground on the optimal-count axis, proving the most instances of any configuration (25/66), though the mean gap (14.29\%) remains above the base.
 B3 (cycle cover cuts) yields the lowest mean gap of all five configurations (12.80\%) but proves the fewest instances (22/66)---on this suite, it appears to tighten bounds on instances it does not close while occasionally displacing an instance that B1+B2 alone would have proven, rather than uniformly helping.
 B4 (path inequalities) again provides no net improvement: both the mean gap (14.78\%) and max gap (57.56\%) are the worst of the five configurations.
@@ -1221,7 +1219,7 @@ Overall, cut families B1--B4 individually and cumulatively make at most a second
 \subsection{Warm-Start Ablation}
 \label{sec:warmstart_ablation}
 
-Both reviewers of an earlier version of this paper asked whether the SA warm start actually matters to the B\&C, or merely supplies a first feasible solution the solver could have found on its own.
+A natural question is whether the SA warm start actually matters to the B\&C, or merely supplies a first feasible solution the solver could have found on its own.
 We answer this directly: we run the full-cut-family configuration (config 5 of \cref{tab:ablation}) on all 66 synthetic benchmark instances twice, once with the SA incumbent passed to the B\&C as usual and once with the B\&C given no incumbent at all (starting from best\_pts $= 0$), all other settings---including the 900\,s time limit---held fixed.
 
 \begin{table}[H]
@@ -1240,13 +1238,13 @@ Warm start on  & 24 / 66 &  0 / 66 & 70{,}540 \\
 
 Without a warm start, the B\&C fails to find \emph{any} feasible integer solution at all---not just an unproven one, a total absence of output---on 42 of 66 instances (64\%) within the time limit.
 On the instances it does resolve it is competitive (23 vs.\ 24 proven optimal, essentially tied), and its own search occasionally improves on what SA alone would have found; but as a practical matter, more than half of the benchmark suite returns nothing usable without SA to seed it, and total points collected across the suite drop by $4.3\times$ (70{,}540 to 16{,}550).
-A naive comparison of mean optimality gap would actively mislead here: the gap statistic defaults to $0\%$ when no incumbent exists (to avoid division by zero), so the 42 zero-output instances contribute a spuriously perfect gap to the average rather than the total failure they represent---the zero-incumbent-failure count in \cref{tab:warmstart_ablation}, not the gap column, is the number that actually answers the reviewers' question.
+A naive comparison of mean optimality gap would actively mislead here: the gap statistic defaults to $0\%$ when no incumbent exists (to avoid division by zero), so the 42 zero-output instances contribute a spuriously perfect gap to the average rather than the total failure they represent---the zero-incumbent-failure count in \cref{tab:warmstart_ablation}, not the gap column, is the number that actually answers this question.
 This is consistent with the standard role of a strong incumbent in branch-and-cut for NP-hard combinatorial problems---it is what makes aggressive pruning practical---rather than evidence that the exact solver contributes nothing on its own; \cref{sec:discussion} discusses the cases where it does improve on SA directly.
 
 \subsection{Comparison Against a Classical OP Baseline}
 \label{sec:classical_baseline}
 
-To respond to reviewer feedback that the paper compared against no other exact OP method, we implement the classical branch-and-cut of \citet{fischetti1998solving} for the undirected, symmetric, fatigue-free OP and run it on the same 66 synthetic instances, using the symmetrised cost $c_{ij} = \tfrac{1}{2}(C_{ij} + C_{ji})$ and ignoring the fatigue term entirely.
+To compare against an existing exact method for a closely related problem, we implement the classical branch-and-cut of \citet{fischetti1998solving} for the undirected, symmetric, fatigue-free OP and run it on the same 66 synthetic instances, using the symmetrised cost $c_{ij} = \tfrac{1}{2}(C_{ij} + C_{ji})$ and ignoring the fatigue term entirely.
 This is deliberately \emph{not} a like-for-like solver comparison---the classical model has only subtour-elimination and cover cuts, none of the fatigue-specific machinery of \cref{sec:formulation,sec:separation}---so a naive reading of its scores against the flow formulation's would conflate two different things: what asymmetry and fatigue cost in achievable score, and what a much smaller cut arsenal costs in the classical solver's own ability to prove or even find good solutions on larger instances.
 We separate the two.
 
@@ -1265,7 +1263,7 @@ The jointly-proven subset above is the number we consider load-bearing; the full
 % ════════════════════════════════════════════════════════════════
 
 \paragraph{SA effectiveness, and when the B\&C improves on it.}
-SA is a strong warm start, but---unlike what a smaller, pre-rework real-terrain run had suggested---the B\&C does not merely certify it: on 4 of the 14 real-terrain instances (Torremocha Mixed-density under both formulations; La Muela Path-biased under both; La Muela Ring and Sparse-far under flow only), the proven-optimal incumbent is strictly better than SA's own solution, by up to 90 points (La Muela Standard under flow, though there unproven).
+SA is a strong warm start, but the B\&C does not merely certify it: on 4 of the 14 real-terrain instances (Torremocha Mixed-density under both formulations; La Muela Path-biased under both; La Muela Ring and Sparse-far under flow only), the proven-optimal incumbent is strictly better than SA's own solution, by up to 90 points (La Muela Standard under flow, though there unproven).
 On the remaining proven instances the B\&C confirms SA's solution without improving it, consistent with SA being highly effective for OP instances of this size, in line with the literature on metaheuristics for the OP \citep{vansteenwegen2011orienteering}---but ``the B\&C only certifies, never improves'' does not hold in general, and \cref{sec:warmstart_ablation} shows why the exact solver's own search still cannot be dropped in favour of SA alone: without a warm start, the same B\&C fails to find \emph{any} feasible solution at all on 42 of the 66 synthetic benchmark instances within the time limit, despite proving 23 of them optimal on the ones it does resolve.
 The B\&C's role is therefore closer to the standard one in branch-and-cut for hard combinatorial problems: it needs a strong incumbent to prune aggressively, and its own contribution is a mix of occasional improvement and, more often, a certified gap (or a proof of optimality) that SA alone cannot provide.
 
