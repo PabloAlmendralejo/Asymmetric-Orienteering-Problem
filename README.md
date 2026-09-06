@@ -18,11 +18,6 @@ The pipeline has two stages:
 
 ## Fatigue Model
 
-> **Status: model rework in progress.** The formulation below is implemented and
-> compiles/runs across all solver variants, but the paper's numeric results
-> (Sec. 6–7) and the real-terrain instances still reflect the *previous* model —
-> see "Known gaps" below.
-
 The original linear model, `f(t) = 1 + λt/B`, is provably order-invariant (the
 same set of arcs gives the same total fatigue cost regardless of visit order),
 which collapses the problem to a much simpler one — this was the central
@@ -34,13 +29,14 @@ objection in EJOR-D-26-01706's review. It's replaced by a per-node fatigue
 ```
 
 `φ+`/`φ-` are cumulative uphill/downhill elevation (metres) and `δ` is path
-distance (metres) along the cost-optimal path for arc `(i,j)`. `ρ` (downhill
-recovery fraction) and `λ` (fatigue rate) are treated as sensitivity
-parameters — swept, not calibrated to a single value — since neither has a
-literature value directly usable in these units. `μ` is derived (not swept)
-from the Minetti curve already used for the base cost. Full derivation and
-the calibration discussion are in `paper/orienteering_paper.tex`, Sec. 3.6
-and Sec. 7.
+distance (metres) along the cost-optimal path for arc `(i,j)`. Rather than a
+sensitivity sweep, `λ` and `ρ` are fixed to literature-cited values:
+`λ = 4.1×10⁻⁵`, derived from grade-adjusted-pace decline over an ultra-trail
+race (Jaén-Carrillo et al. 2025), and `ρ = 0`, since post-ultramarathon
+downhill running economy has been shown to *worsen*, not recover
+(Vernillo et al. 2015). `μ` is derived (not swept) from the Minetti curve
+already used for the base cost. Full derivation and the calibration
+discussion are in `paper/orienteering_paper.tex`, Sec. 3.6 and Sec. 7.
 
 The true (clipped) fatigue state is `F_j = max(0, F_i + ψ_ij)`; the LP
 relaxation uses the unclipped `G_i` (a valid upper bound on `F_i`) for the
@@ -50,18 +46,24 @@ coupling bound (`Ĝ_i` and `Ǧ_i`) where the original model only needed one.
 
 ### Known gaps
 
-- **Real-terrain data**: `op_input_torremocha_*.json` / `op_input_la_muela_*.json`
-  don't exist in this checkout — rerun the Python pipeline (`--preprocess`) to
-  regenerate them with `gain`/`loss`/`dist`. The `cpp/solver_*` binaries have
-  only been tested against the synthetic benchmark instances so far.
-- **λ calibration**: no literature value exists in the new units (metres of
-  elevation, not a normalised budget fraction). Treated as a sweep
-  (`--lambda-sweep`), anchored to an order-of-magnitude estimate, not a
-  calibrated constant.
-- **Paper results (Sec. 6–7)**: the numeric tables (Torremocha/La Muela,
-  MTZ-vs-Flow, ablation study) still reflect the old model. Updating them
-  needs the full experimental suite rerun against regenerated real-terrain
-  data.
+- **B2/B3 tightness**: the routing-infeasibility (B2) and cycle-cover (B3) cut
+  proofs carry over unchanged from the old model (they're stated purely in
+  terms of the AOPF's feasibility definition), but whether the LP's
+  `Ĝ_i`/`Ǧ_i` bounds are always tight relative to the true clipped fatigue
+  state is not rigorously proven. This doesn't affect the correctness of any
+  reported route — every output is independently re-validated against the
+  exact clipped model — only the tightness/completeness of the LP relaxation
+  itself.
+- **Terrain diversity**: validated on two Spanish terrains (Torremocha,
+  La Muela). Torremocha's IQR-based cost-fusion scaling is degenerate
+  (`c = 0.00`, see Sec. 8 of the paper) because its own ACR cost distribution
+  has near-zero spread — HCR morphometry effectively carries the whole
+  combined-cost signal there, unlike La Muela (`c = 1.09`).
+- **No modern exact-OP baseline**: compared only against a classical
+  (undirected, symmetric, fatigue-free) Fischetti et al. (1998) baseline
+  (`benchmark/solver_op_classical.cpp`). A modern exact OP solver such as
+  Kobeaga et al. (2021) would need IBM CPLEX, which has no Windows ARM64
+  build (this development machine's architecture) — out of scope for now.
 
 ## Project Structure
 
@@ -92,9 +94,11 @@ coupling bound (`Ĝ_i` and `Ǧ_i`) where the original model only needed one.
 │   ├── generate_instances.py        # Parameterized instance generator
 │   ├── benchmark_solver_mtz.cpp     # MTZ B&C solver for benchmarks
 │   ├── benchmark_solver_flow.cpp    # Flow B&C solver for benchmarks
-│   ├── benchmark_solver_ablation.cpp # Ablation study solver (cut toggles, no sweep)
+│   ├── benchmark_solver_ablation.cpp # Ablation study solver (cut toggles)
+│   ├── solver_op_classical.cpp      # Classical (undirected, fatigue-free) OP baseline
 │   ├── compare_heuristics.cpp       # Greedy / GA / ACO / SA comparison
-│   ├── instances/                   # 21 synthetic benchmark instances
+│   ├── analyze_heuristics.py        # Exact Wilcoxon + Holm-Bonferroni + effect size
+│   ├── instances/                   # 66 synthetic benchmark instances
 │   └── README.md
 ├── paper/
 │   └── orienteering_paper.tex       # LaTeX paper
@@ -147,8 +151,7 @@ cl.exe /O2 /MD /std:c++20 /EHsc solver_flow_torremocha.cpp ^
 
 # Run (from directory with op_input_*.json files):
 solver_flow_torremocha.exe
-solver_flow_torremocha.exe --rho-sweep     # sensitivity sweep over rho
-solver_flow_torremocha.exe --lambda-sweep  # sensitivity sweep over lambda
+solver_flow_torremocha.exe --fixed-lambda=4.1e-5 --fixed-rho=0  # override lambda/rho
 ```
 
 ### Visualization
@@ -169,24 +172,39 @@ hillshade, directional asymmetry heatmap, and route overlay with A* traced paths
 | Area | 2.1 × 2.9 km | 2.8 × 3.2 km |
 | Resolution | 2.0 m | 2.0 m |
 | Relief | 55 m | 464 m |
-| Cost asymmetry | 16.1% | 50.0% |
-| IQR scaling (c) | 0.87 | 2.18 |
+| Cost asymmetry | 17.5% | 36.6% |
+| IQR scaling (c) | 0.00 | 1.09 |
 
-(Instance-level results — proven-optimal counts, LP gaps — are omitted here
-pending the experimental rerun noted under "Known gaps" above; see the paper
-for the most recent numbers, with the caveat that those predate the fatigue
-model rework too.)
+Across both terrains (7 control-point distributions each, 14 instances
+total), the MTZ formulation proves 10/14 instances optimal within the
+15-minute time limit versus 9/14 for the flow formulation, though flow's
+mean LP-relaxation gap on the unproven instances is lower (4.81% vs.
+5.57%). See the paper's Results section for the full per-distribution
+tables and discussion.
 
 ## Benchmark Suite
 
-Parameterized instances for the asymmetric OP with fatigue — the first
-benchmark set for this problem variant. See `benchmark/README.md` for details.
+Parameterized instances (66 total, 3 seeds per configuration) for the
+asymmetric OP with fatigue — the first benchmark set for this problem
+variant. See `benchmark/README.md` for details.
 
 Instances vary across:
-- Node count: 20, 30, 40, 50, 75, 100
+- Node count: 20, 30, 40, 50, 75, 100, 125, 150, 200
 - Asymmetry: 0% to 50%
-- Fatigue rate: 0.0 to 0.3
 - Budget tightness: loose (70%), medium (50%), tight (30%) of NN tour cost
+
+All instances are solved at the same fixed `λ = 4.1×10⁻⁵`, `ρ = 0` (see
+"Fatigue Model" above) — an earlier version of this suite also varied a
+nominal fatigue rate per instance and swept `λ`/`ρ` per run, but that
+dimension no longer reflects a real experimental contrast under the fixed
+calibration, so it isn't reported as a separate results axis.
+
+A classical (undirected, symmetric, fatigue-free) OP baseline
+(`solver_op_classical.cpp`, per Fischetti et al. 1998) and a heuristic
+comparison (Greedy / GA / ACO vs. SA, `compare_heuristics.cpp`) are also
+included — the latter with exact Wilcoxon signed-rank tests,
+Holm-Bonferroni correction across the 3 pairwise comparisons, and a
+rank-biserial effect size (`analyze_heuristics.py`).
 
 ## B&C Solver Features
 

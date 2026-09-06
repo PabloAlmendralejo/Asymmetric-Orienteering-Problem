@@ -675,29 +675,29 @@ Otherwise the cut is added if inequality~\eqref{eq:path_ineq} is violated by the
 \label{sec:sa}
 
 \paragraph{Method selection.}
-The SA metaheuristic was selected after a comparative study on 21 benchmark instances across varying sizes ($n = 20$--$100$), asymmetry levels, and fatigue rates.
+The SA metaheuristic was selected after a comparative study on the full 66-instance benchmark suite (\cref{sec:benchmark}) across varying sizes ($n = 20$--$200$), asymmetry levels, and budget tightness, at the fixed calibration $\lambda = 4.1\times10^{-5}$, $\rho = 0$ (\cref{sec:experiments}).
 Four methods were evaluated with equal computational budget (2 seconds per method per instance, 10 independent seeds for stochastic methods): Greedy Insertion (deterministic), Genetic Algorithm (GA, population 50), Ant Colony Optimisation (ACO, 30 ants), and Simulated Annealing (SA).
 
 \begin{table}[H]
 \centering
-\caption{Heuristic comparison: mean gap below SA (\%) across 21 benchmark instances (equal 2\,s time budget, 10 seeds per stochastic method). All differences are statistically significant (Wilcoxon signed-rank, $p < 0.001$). This comparison predates the benchmark suite's expansion to 66 instances and the fixed-$(\lambda,\rho)$ calibration (\cref{sec:experiments}) and has not been rerun under either change; we expect the qualitative ranking (SA $>$ ACO $>$ Greedy $>$ GA) to be robust to both, since it reflects each heuristic's move-generation mechanism rather than the specific $\lambda$ value.}
+\caption{Heuristic comparison: mean gap below SA (\%) across 66 benchmark instances (equal 2\,s time budget, 10 seeds per stochastic method, $\lambda = 4.1\times10^{-5}$, $\rho = 0$). Significance is an exact Wilcoxon signed-rank test (\texttt{scipy.stats.wilcoxon}) on the 66 paired instance means, Holm-Bonferroni corrected across the 3 comparisons against SA; effect size is the matched-pairs rank-biserial correlation $r$.}
 \label{tab:heuristic_comparison}
-\begin{tabular}{lrrrr}
+\begin{tabular}{lrrrrr}
 \toprule
-\textbf{Method} & \textbf{Mean gap} & \textbf{Std} & \textbf{Min gap} & \textbf{Max gap} \\
+\textbf{Method} & \textbf{Mean gap} & \textbf{Std} & \textbf{Min gap} & \textbf{Max gap} & \textbf{$p_{\text{Holm}}$ ($r$)} \\
 \midrule
-Greedy  & 23.0\% &  9.4\% &  3.7\% & 40.0\% \\
-GA      & 49.2\% & 11.0\% & 24.6\% & 71.9\% \\
-ACO     &  8.1\% &  4.9\% &  1.3\% & 24.1\% \\
-SA      &  ---   & ---    &  ---   & ---    \\
+Greedy  & 19.0\% &  8.8\% &  3.4\% & 40.0\% & $4.9\times10^{-12}$ (1.00) \\
+GA      & 54.1\% & 14.8\% & 15.7\% & 81.1\% & $4.9\times10^{-12}$ (1.00) \\
+ACO     &  8.6\% &  5.1\% &  0.0\% & 22.9\% & $4.9\times10^{-12}$ (1.00) \\
+SA      &  ---   & ---    &  ---   & ---    & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-SA significantly outperforms all three alternatives under equal time budgets (Wilcoxon signed-rank test, $n = 21$ instances, all $p < 0.001$; SA achieves a higher mean score than each competitor on all 21 instances).
-The GA performs worst (49.2\% below SA on average), as crossover on directed routes frequently produces infeasible offspring requiring expensive repair, and the rugged fitness landscape under asymmetric costs degrades convergence.
-ACO is the closest competitor (8.1\% below SA) but its pheromone mechanism weakens on asymmetric instances where edge quality is context-dependent on elapsed time and travel direction---the gap widens to 24.1\% on the hardest instance.
-Greedy Insertion (23.0\% below SA) is fast but myopic, committing to locally attractive nodes without ability to backtrack.
+SA significantly outperforms all three alternatives under equal time budgets: an exact Wilcoxon signed-rank test on the 66 paired instance means, Holm-Bonferroni corrected across the 3 comparisons, gives $p_{\text{Holm}} \approx 4.9\times10^{-12}$ for each, with a rank-biserial effect size of $r = 1.00$ in every case---SA's mean score exceeds every competitor's on all 66 instances with no ties, i.e.\ each test's negative-rank sum is exactly zero.
+The GA performs worst (54.1\% below SA on average), as crossover on directed routes frequently produces infeasible offspring requiring expensive repair, and the rugged fitness landscape under asymmetric costs degrades convergence.
+ACO is the closest competitor (8.6\% below SA) but its pheromone mechanism weakens on asymmetric instances where edge quality is context-dependent on elapsed time and travel direction---the gap widens to 22.9\% on the largest instance ($n = 200$).
+Greedy Insertion (19.0\% below SA) is fast but myopic, committing to locally attractive nodes without ability to backtrack.
 
 SA's advantage stems from its single-solution trajectory search: it evaluates each candidate move in full context (current route, elapsed time, fatigue state, directional costs) without needing to decompose the solution into reusable components.
 The Or-opt and swap moves are particularly effective on asymmetric instances because they directly evaluate the actual cost change of rearranging the visit sequence, naturally accounting for directionality.
