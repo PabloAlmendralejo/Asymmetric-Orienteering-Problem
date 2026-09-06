@@ -278,6 +278,10 @@ struct LPModel {
         Highs_setBoolOptionValue(highs, "output_flag", false);
         Highs_setStringOptionValue(highs, "presolve", "on");
         Highs_setStringOptionValue(highs, "solver", "simplex");
+        // Safety net independent of all the B&C-level time checks: none of
+        // those can interrupt a single .solve() call already in progress.
+        // Caps one call, not the search as a whole.
+        Highs_setDoubleOptionValue(highs, "time_limit", 300.0);
         Highs_setStringOptionValue(highs, "simplex_strategy", "1"); // dual simplex
 
         x_col.assign(n, std::vector<int>(n, -1));
@@ -370,6 +374,10 @@ struct LPModel {
         Highs_setBoolOptionValue(highs, "output_flag", false);
         Highs_setStringOptionValue(highs, "presolve", "on");
         Highs_setStringOptionValue(highs, "solver", "simplex");
+        // Safety net independent of all the B&C-level time checks: none of
+        // those can interrupt a single .solve() call already in progress.
+        // Caps one call, not the search as a whole.
+        Highs_setDoubleOptionValue(highs, "time_limit", 300.0);
 
         // Deep-copy via Highs_passLp ΓÇö no temp file, faster, thread-safe
         {
@@ -1293,6 +1301,12 @@ struct MapResult {
 };
 
 int main(int argc, char** argv) {
+    double fixed_rho = -1.0, fixed_lambda = -1.0;
+    for (int a = 1; a < argc; ++a) {
+        std::string arg = argv[a];
+        if (arg.rfind("--fixed-rho=", 0) == 0) fixed_rho = std::stod(arg.substr(12));
+        else if (arg.rfind("--fixed-lambda=", 0) == 0) fixed_lambda = std::stod(arg.substr(15));
+    }
     const std::vector<std::pair<std::string,std::string>> maps = {
         {"op_input_standard.json",     "op_output_standard.json"},
         {"op_input_clustered.json",     "op_output_clustered.json"},
@@ -1317,8 +1331,15 @@ int main(int argc, char** argv) {
 
     std::vector<MapResult> results;
 
-    for (const auto& [in, out] : maps) {
-        try { run_map(in, out); }
+    // When run with fixed overrides, tag the output filename so it doesn't
+    // collide with the sibling flow solver's run over the same directory.
+    std::string fixed_suffix;
+    if (fixed_lambda >= 0.0 || fixed_rho >= 0.0) fixed_suffix = "_fixedLR_mtz";
+
+    for (const auto& [in, out0] : maps) {
+        std::string out = fixed_suffix.empty() ? out0
+            : out0.substr(0, out0.size() - 5) + fixed_suffix + ".json";
+        try { run_map(in, out, fixed_rho, fixed_lambda); }
         catch (const std::exception& e) {
             std::cerr << "Error on " << in << ": " << e.what() << '\n';
             continue;

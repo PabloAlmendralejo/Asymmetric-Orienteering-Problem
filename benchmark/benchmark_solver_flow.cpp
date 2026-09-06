@@ -303,6 +303,10 @@ struct LPModel {
         Highs_setBoolOptionValue(highs, "output_flag", false);
         Highs_setStringOptionValue(highs, "presolve", "on");
         Highs_setStringOptionValue(highs, "solver", "simplex");
+        // Safety net independent of all the B&C-level time checks: none of
+        // those can interrupt a single .solve() call already in progress.
+        // Caps one call, not the search as a whole.
+        Highs_setDoubleOptionValue(highs, "time_limit", 300.0);
 
         x_col.assign(n, std::vector<int>(n, -1));
         y_col.resize(n, -1);
@@ -378,6 +382,10 @@ struct LPModel {
         Highs_setBoolOptionValue(highs, "output_flag", false);
         Highs_setStringOptionValue(highs, "presolve", "on");
         Highs_setStringOptionValue(highs, "solver", "simplex");
+        // Safety net independent of all the B&C-level time checks: none of
+        // those can interrupt a single .solve() call already in progress.
+        // Caps one call, not the search as a whole.
+        Highs_setDoubleOptionValue(highs, "time_limit", 300.0);
 
         // Deep-copy via Highs_passLp — no temp file, faster, thread-safe
         {
@@ -1774,9 +1782,27 @@ struct Solver {
             // Reliability branching: use strong branching for first few decisions,
             // then fall back to pseudocost branching
             if (node.fixings.size() < 6 && candidates.size() <= 15) {
-                // Strong branching: tentatively branch on each candidate, pick best
+                // Strong branching: tentatively branch on each candidate, pick best.
+                // Up to 15 candidates x 2 LP re-solves each, with NO time check --
+                // on instances where many nodes have many fractional candidates,
+                // this compounds well past time_limit_s before the next check
+                // (at the top of the cut loop) ever fires. Bail out (falling
+                // back to whatever candidate scored best so far, or the
+                // most-fractional one if none did) once the budget is spent.
                 double best_score = -1.0;
                 for (const auto& [ni, col] : candidates) {
+                    double elapsed_sb = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+                    if (elapsed_sb > time_limit_s) {
+                        if (branch_col < 0) {
+                            double max_frac = 0.0;
+                            for (const auto& [ni2, col2] : candidates) {
+                                double v = lp.prim(col2);
+                                double frac = std::min(v, 1.0 - v);
+                                if (frac > max_frac) { max_frac = frac; branch_col = col2; }
+                            }
+                        }
+                        break;
+                    }
                     // Try fixing to 0
                     auto fixings0 = node.fixings;
                     fixings0.emplace_back(col, 0.0);

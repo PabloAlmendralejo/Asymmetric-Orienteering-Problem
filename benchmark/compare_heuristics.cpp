@@ -34,9 +34,11 @@ struct Input {
     std::vector<std::vector<double>> cm;
     std::vector<std::vector<double>> gain;
     std::vector<std::vector<double>> loss;
+    std::vector<std::vector<double>> dist;   // cumulative horizontal path length (metres)
     std::vector<double> pts;
     double bud_eff = 0.0, bud_raw = 0.0, fatigue_rate = 0.0;
     double rho = 0.5;
+    double mu = 0.0;   // distance-to-elevation fatigue weight, derived not swept
 };
 
 static Input parse_input(const std::string& json_str) {
@@ -85,7 +87,10 @@ static Input parse_input(const std::string& json_str) {
     else { inp.gain.assign(n, std::vector<double>(n, 0.0)); }
     if (find_key_opt("loss")) { inp.loss = parse_array2d(i); }
     else { inp.loss.assign(n, std::vector<double>(n, 0.0)); }
+    if (find_key_opt("dist")) { inp.dist = parse_array2d(i); }
+    else { inp.dist.assign(n, std::vector<double>(n, 0.0)); }
     if (find_key_opt("rho_default")) { i = skip_ws(i); inp.rho = parse_number(i); }
+    if (find_key_opt("mu_default")) { i = skip_ws(i); inp.mu = parse_number(i); }
     return inp;
 }
 
@@ -112,7 +117,7 @@ static double rcost_fatigue(const std::vector<std::vector<double>>& cm,
 // Corrected asymmetric, clipped fatigue model (Sec 3.6 rework). Used for
 // all feasibility gating below, replacing the plain rcost_fatigue calls.
 static inline double psi_arc(const Input& inp, int i, int j, double rho) {
-    return inp.gain[i][j] - rho * inp.loss[i][j];
+    return inp.gain[i][j] - rho * inp.loss[i][j] + inp.mu * inp.dist[i][j];
 }
 static double rcost_fatigue_asym(const Input& inp, const std::vector<int>& route, double rho) {
     if (route.empty()) return inp.cm[0][0];
@@ -361,7 +366,13 @@ double wilcoxon_z(const std::vector<double>& a, const std::vector<double>& b) {
 // ── Main ──
 int main(int argc, char* argv[]) {
     std::string input_dir = "instances";
-    if (argc > 1) input_dir = argv[1];
+    double fixed_lambda = -1.0, fixed_rho = -1.0;
+    for (int a = 1; a < argc; ++a) {
+        std::string arg = argv[a];
+        if (arg.rfind("--fixed-lambda=", 0) == 0) fixed_lambda = std::stod(arg.substr(15));
+        else if (arg.rfind("--fixed-rho=", 0) == 0) fixed_rho = std::stod(arg.substr(12));
+        else input_dir = arg;
+    }
 
     // Collect all input files
     std::vector<std::string> files;
@@ -394,6 +405,8 @@ int main(int argc, char* argv[]) {
         Input inp;
         try { inp = parse_input(read_file(fpath)); }
         catch (...) { std::cerr << "    SKIP (parse error)\n"; continue; }
+        if (fixed_lambda >= 0.0) inp.fatigue_rate = fixed_lambda;
+        if (fixed_rho >= 0.0) inp.rho = fixed_rho;
 
         // Greedy (deterministic)
         double greedy_pts = rpts(inp.pts, solve_greedy(inp));
@@ -419,6 +432,16 @@ int main(int argc, char* argv[]) {
 
         results.push_back({name, greedy_pts, ga_s.mean, ga_s.stddev,
                            aco_s.mean, aco_s.stddev, sa_s.mean, sa_s.stddev});
+    }
+
+    // ── Machine-readable CSV (for downstream aggregation) ──
+    {
+        std::ofstream csv("heuristic_comparison_results.csv");
+        csv << "name,greedy,ga_mean,ga_std,aco_mean,aco_std,sa_mean,sa_std\n";
+        for (const auto& r : results) {
+            csv << r.name << "," << r.greedy << "," << r.ga_mean << "," << r.ga_std << ","
+                << r.aco_mean << "," << r.aco_std << "," << r.sa_mean << "," << r.sa_std << "\n";
+        }
     }
 
     // ── Per-instance table ──

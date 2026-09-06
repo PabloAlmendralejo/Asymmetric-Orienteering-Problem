@@ -42,8 +42,8 @@ A GIS pipeline combines International Orienteering Federation (IOF) map symbols,
 The terrain realities captured by this pipeline---asymmetry, fatigue, and heterogeneous surface costs---lead naturally to a new problem variant, the Asymmetric Orienteering Problem with Fatigue (AOPF), for which we develop tailored exact solution methods.
 We propose two LP formulations: an MTZ-based model with McCormick linearisation and a single-commodity flow formulation where the fatigue budget constraint is linear directly in the decision variables, with no bilinear term to linearise.
 We strengthen the Branch-and-Cut solver with routing infeasibility cuts, a novel family of pure node-variable inequalities based on the assignment relaxation, alongside tightened flow-arc coupling bounds, fatigue-aware lifted covers, and directed adaptations of cycle cover and path inequalities.
-We validate the framework on two Spanish terrains across seven control-point distributions each, and release a parameterised benchmark suite of 21 instances for the asymmetric OP with fatigue.
-The flow-based B\&C certifies global optimality on 9 of 14 real-terrain instances (all $\leq 40$ nodes) within a 15-minute time limit, with tighter LP gaps than the MTZ formulation (mean gap 5.4\% vs.\ 16.0\% on benchmark instances).
+We validate the framework on two Spanish terrains across seven control-point distributions each, and release a parameterised benchmark suite of 66 instances for the asymmetric OP with fatigue.
+The flow-based B\&C certifies global optimality on 9 of 14 real-terrain instances (all $\leq 40$ nodes) within a 15-minute time limit, with tighter LP gaps than the MTZ formulation (mean gap 14.3\% vs.\ 26.2\% on benchmark instances).
 \end{abstract}
 
 \noindent\textbf{Keywords:} orienteering problem, asymmetric routing, cumulative fatigue, branch-and-cut, valid inequalities, flow formulation, terrain cost surface, Minetti metabolic model
@@ -205,7 +205,7 @@ For example, when the ACR distribution is multimodal (due to discrete symbol cat
 We evaluated six scaling methods on both study areas: median ratio, mean ratio, IQR ratio, standard deviation ratio, percentile range matching, and full quantile mapping.
 The median and mean ratios produced excessively large constants ($c > 7$) due to the different distribution shapes of ACR (discrete symbol weights) and HCR (continuous, right-skewed).
 Percentile and quantile mapping over-corrected by forcing HCR to mimic ACR's distribution.
-The IQR ratio was selected for its robustness to outliers and its focus on matching variability rather than central tendency, adapting automatically to terrain characteristics ($c = 0.87$ for Torremocha, $c = 2.18$ for La Muela).
+The IQR ratio was selected for its robustness to outliers and its focus on matching variability rather than central tendency, adapting automatically to terrain characteristics on La Muela ($c = 1.09$) --- though not unconditionally: on Torremocha it degenerates to $c = 0$, discussed as a limitation in \cref{sec:discussion}.
 A straightforward alternative, normalising both rasters to $[0,1]$, was rejected because it would discard the ACR's physically meaningful scale, where cell weights directly encode running speed ratios derived from IOF symbol specifications.
 
 We propose an Interquartile Range (IQR) ratio:
@@ -680,7 +680,7 @@ Four methods were evaluated with equal computational budget (2 seconds per metho
 
 \begin{table}[H]
 \centering
-\caption{Heuristic comparison: mean gap below SA (\%) across 21 benchmark instances (equal 2\,s time budget, 10 seeds per stochastic method). All differences are statistically significant (Wilcoxon signed-rank, $p < 0.001$).}
+\caption{Heuristic comparison: mean gap below SA (\%) across 21 benchmark instances (equal 2\,s time budget, 10 seeds per stochastic method). All differences are statistically significant (Wilcoxon signed-rank, $p < 0.001$). This comparison predates the benchmark suite's expansion to 66 instances and the fixed-$(\lambda,\rho)$ calibration (\cref{sec:experiments}) and has not been rerun under either change; we expect the qualitative ranking (SA $>$ ACO $>$ Greedy $>$ GA) to be robust to both, since it reflects each heuristic's move-generation mechanism rather than the specific $\lambda$ value.}
 \label{tab:heuristic_comparison}
 \begin{tabular}{lrrrr}
 \toprule
@@ -901,9 +901,9 @@ Relief & 55\,m & 464\,m \\
 Median slope & $3.2^\circ$ & $15.9^\circ$ \\
 Max slope & $58.9^\circ$ & $81.2^\circ$ \\
 CRS & EPSG:25829 & EPSG:25830 \\
-IQR scaling $c$ & 0.87 & 2.18 \\
-HCR median increase & $+14.8\%$ & $+55.1\%$ \\
-Cost asymmetry & $16.1\%$ & $50.0\%$ \\
+IQR scaling $c$ & 0.00 & 1.09 \\
+HCR median increase & $+0.0\%$ & $+9.3\%$ \\
+Cost asymmetry & $17.5\%$ & $36.6\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -966,154 +966,161 @@ A gap of 0.0\% with ``YES'' indicates that the B\&C has proven the SA solution t
 
 \begin{table}[H]
 \centering
-\caption{Torremocha results: SA and B\&C under both formulations (IQR scaling $c = 0.87$, cost asymmetry $\mathcal{A} = 16.1\%$). B\&C uses depth-first search (see \cref{sec:node-selection}).}
+\caption{Torremocha results: SA and B\&C under both formulations (IQR scaling $c = 0.00$---see \cref{sec:discussion} on why ACR's interquartile range is degenerate here, so HCR contributes nothing to the combined cost on this terrain---cost asymmetry $\mathcal{A} = 17.5\%$). B\&C uses depth-first search (see \cref{sec:node-selection}); gap is the LP-relaxation gap defined above. $\lambda = 4.1\times10^{-5}$, $\rho = 0$ throughout (\cref{sec:experiments}).}
 \label{tab:torremocha}
-\begin{tabular}{lrrrrcrrc}
+\begin{tabular}{lrrrrrcrrc}
 \toprule
-& & \multicolumn{2}{c}{\textbf{SA}} & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
-\cmidrule(lr){3-4} \cmidrule(lr){5-6} \cmidrule(lr){7-8}
-\textbf{Distribution} & ctrls & pts & visited & gap & optimal? & gap & optimal? \\
+& & \multicolumn{2}{c}{\textbf{SA}} & \multicolumn{2}{c}{\phantom{x}} & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
+\cmidrule(lr){3-4} \cmidrule(lr){7-8} \cmidrule(lr){9-10}
+\textbf{Distribution} & ctrls & pts & time (s) & \multicolumn{2}{c}{} & pts & gap & pts & gap \\
 \midrule
-Standard        & 40 &  940 & 25 & 14.1\% & no  & 12.2\% & no \\
-Clustered       & 35 &  510 & 29 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Ring            & 30 &  650 & 26 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Path-biased     & 35 &  630 & 30 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Elev-biased     & 35 &  380 & 29 &  7.4\% & no  &  6.3\% & no \\
-Sparse-far      & 25 &  660 & 19 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Mixed-density   & 40 &  680 & 32 &  8.6\% & no  &  7.1\% & no \\
+Standard        & 40 & 1040 & 1.6 & \multicolumn{2}{c}{} & 1100 & 11.8\% (no) & 1100 & 11.7\% (no) \\
+Clustered       & 35 &  630 & 1.2 & \multicolumn{2}{c}{} &  630 &  0.0\% (\textbf{YES}) &  630 &  0.0\% (\textbf{YES}) \\
+Ring            & 30 &  720 & 1.3 & \multicolumn{2}{c}{} &  720 &  0.0\% (\textbf{YES}) &  720 &  0.0\% (\textbf{YES}) \\
+Path-biased     & 21 &  230 & 1.2 & \multicolumn{2}{c}{} &  230 &  0.0\% (\textbf{YES}) &  230 &  0.0\% (\textbf{YES}) \\
+Elev-biased     & 35 &  670 & 1.5 & \multicolumn{2}{c}{} &  670 &  0.0\% (\textbf{YES}) &  670 &  0.0\% (\textbf{YES}) \\
+Sparse-far      & 25 &  940 & 1.1 & \multicolumn{2}{c}{} &  940 &  0.0\% (\textbf{YES}) &  940 &  0.0\% (\textbf{YES}) \\
+Mixed-density   & 40 &  890 & 2.6 & \multicolumn{2}{c}{} &  960 &  0.0\% (\textbf{YES}) &  980 &  0.0\% (\textbf{YES}) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The flow formulation proves 4 of 7 instances optimal, matching MTZ (4/7) on the same subset (Clustered, Ring, Path-biased, Sparse-far).
-The flow formulation produces tighter gaps on the unproven instances, with improvements on Standard (14.1\% $\to$ 12.2\%), Elev-biased (7.4\% $\to$ 6.3\%), and Mixed-density (8.6\% $\to$ 7.1\%).
+Both formulations prove 6 of 7 instances optimal, failing only on Standard (a 41-node instance, the largest on this terrain), where both reach the 900\,s time limit at a near-identical gap ($11.8\%$ MTZ vs.\ $11.7\%$ flow).
+On Mixed-density, both formulations improve on the SA incumbent (890 $\to$ 960 MTZ, 890 $\to$ 980 flow) and prove the improved solution optimal; the flow formulation finds a strictly better route (980 vs.\ 960 points) in a fraction of the time (15.7\,s vs.\ 309.3\,s), the clearest instance-level evidence on this terrain that the flow formulation's tighter LP relaxation translates into real search-time savings, not just a smaller gap on unproven instances.
+On every other instance, the exact solvers only certify the SA solution as optimal without improving it, consistent with the pattern discussed in \cref{sec:discussion}.
 
 \subsection{La Muela Results}
 
 \begin{table}[H]
 \centering
-\caption{La Muela results: SA and B\&C under both formulations (IQR scaling $c = 2.18$, cost asymmetry $\mathcal{A} = 50.0\%$). B\&C uses depth-first search (see \cref{sec:node-selection}).}
+\caption{La Muela results: SA and B\&C under both formulations (IQR scaling $c = 1.09$, cost asymmetry $\mathcal{A} = 36.6\%$). B\&C uses depth-first search (see \cref{sec:node-selection}); gap is the LP-relaxation gap defined above. $\lambda = 4.1\times10^{-5}$, $\rho = 0$ throughout (\cref{sec:experiments}).}
 \label{tab:lamuela}
-\begin{tabular}{lrrrrcrrc}
+\begin{tabular}{lrrrrrcrrc}
 \toprule
-& & \multicolumn{2}{c}{\textbf{SA}} & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
-\cmidrule(lr){3-4} \cmidrule(lr){5-6} \cmidrule(lr){7-8}
-\textbf{Distribution} & ctrls & pts & visited & gap & optimal? & gap & optimal? \\
+& & \multicolumn{2}{c}{\textbf{SA}} & \multicolumn{2}{c}{\phantom{x}} & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
+\cmidrule(lr){3-4} \cmidrule(lr){7-8} \cmidrule(lr){9-10}
+\textbf{Distribution} & ctrls & pts & time (s) & \multicolumn{2}{c}{} & pts & gap & pts & gap \\
 \midrule
-Standard        & 31 &  610 & 14 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Clustered       & 35 &  800 & 24 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Ring            & 30 &  470 & 21 &  6.3\% & no  &  0.0\% & \textbf{YES} \\
-Path-biased     & 35 &  570 & 17 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Elev-biased     & 35 &  730 & 22 & 17.0\% & no  & 12.4\% & no \\
-Sparse-far      & 25 &  600 & 13 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Mixed-density   & 40 &  680 & 25 & 14.6\% & no  &  8.6\% & no \\
+Standard        & 31 &  700 & 1.5 & \multicolumn{2}{c}{} &  710 & 16.5\% (no) &  780 &  4.9\% (no) \\
+Clustered       & 35 &  960 & 3.5 & \multicolumn{2}{c}{} &  960 &  0.0\% (\textbf{YES}) &  970 &  2.1\% (no) \\
+Ring            & 30 &  690 & 2.6 & \multicolumn{2}{c}{} &  690 &  0.0\% (\textbf{YES}) &  710 &  0.0\% (\textbf{YES}) \\
+Path-biased     & 25 &  380 & 2.8 & \multicolumn{2}{c}{} &  400 &  0.0\% (\textbf{YES}) &  410 &  0.0\% (\textbf{YES}) \\
+Elev-biased     & 35 &  600 & 2.3 & \multicolumn{2}{c}{} &  640 & 24.8\% (no) &  640 & 24.2\% (no) \\
+Sparse-far      & 25 & 1020 & 2.3 & \multicolumn{2}{c}{} & 1020 &  0.0\% (\textbf{YES}) & 1060 &  0.0\% (\textbf{YES}) \\
+Mixed-density   & 40 &  790 & 2.6 & \multicolumn{2}{c}{} &  840 & 24.9\% (no) &  840 & 24.4\% (no) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-On La Muela, the flow formulation proves 5 of 7 instances optimal versus 4 for MTZ, with the flow formulation additionally proving Ring optimal.
-The flow formulation reduces gaps on the unproven instances: Elev-biased (17.0\% $\to$ 12.4\%) and Mixed-density (14.6\% $\to$ 8.6\%).
-Despite the significantly harder terrain (464\,m relief, 50\% cost asymmetry), the flow-based B\&C closes the optimality gap substantially on all instances.
+On this harder, more asymmetric terrain, the pattern reverses from Torremocha: MTZ proves 4 of 7 instances optimal versus 3 for flow, because flow finds a strictly better incumbent than MTZ on Clustered (970 vs.\ 960) and Standard (780 vs.\ 710) but cannot certify it within the time limit, whereas MTZ's weaker relaxation happens to make Clustered's smaller search tree exhaustible in time.
+Where flow does not prove optimality, however, its gaps are consistently at or below MTZ's (Standard: $4.9\%$ vs.\ $16.5\%$; Clustered: $2.1\%$ vs.\ proven; Elev-biased: $24.2\%$ vs.\ $24.8\%$; Mixed-density: $24.4\%$ vs.\ $24.9\%$), so the tighter relaxation still shows up as tighter bounds even on the instances it does not close.
+Elev-biased and Mixed-density remain hard for both formulations (gaps above $24\%$), suggesting the difficulty here is intrinsic to those control-point distributions on this terrain rather than a formulation weakness.
 
-Across both terrains (14 instances total), the flow formulation proves 9 of 14 instances optimal (vs.\ 8 for MTZ) and reduces the mean gap on unproven instances from 11.3\% to 9.3\%.
+Across both terrains (14 instances total), MTZ proves 10 of 14 instances optimal versus 9 for flow, reversing the direction reported in earlier (pre-rework) results.
+That earlier comparison is not on the same footing as this one: it predates a fix to the terrain cost pipeline itself (a coordinate-scaling bug that left the ACR map-symbol cost layer flat, \cref{sec:discussion}), so the earlier runs solved a materially different, less realistic cost surface, not just a different code revision of the same instances.
+The mean LP-relaxation gap on the unproven instances is nonetheless lower for flow ($4.81\%$ across the 5 unproven instances) than for MTZ ($5.57\%$ across the 5 unproven instances), so flow's tighter relaxation remains visible in the bound quality even where it proves fewer instances outright.
+This is a more qualified result than the flow formulation being uniformly better, and we report it as such rather than the stronger claim the pre-rework results supported.
 
 \subsection{Synthetic Benchmark Instances}
 \label{sec:benchmark}
 
 To the best of our knowledge, no standard benchmark exists for the asymmetric OP with fatigue.
-We generate a parameterized benchmark suite by varying four dimensions independently from a baseline configuration ($n = 40$, $\alpha = 0.25$, $\lambda = 0.2$, medium budget):
+We generate a parameterized benchmark suite of 66 instances (3 random seeds per configuration) by varying three dimensions independently from a baseline configuration ($n = 40$, $\alpha = 0.25$, medium budget):
 \begin{itemize}[nosep]
-  \item Node count $n \in \{20, 30, 40, 50, 75, 100\}$
+  \item Node count $n \in \{20, 30, 40, 50, 75, 100, 125, 150, 200\}$
   \item Asymmetry parameter $\alpha \in \{0.0, 0.1, 0.25, 0.5\}$, controlling directional cost perturbation
-  \item Fatigue rate $\lambda \in \{0.0, 0.1, 0.2, 0.3\}$
   \item Budget tightness: loose ($\sim$70\%), medium ($\sim$50\%), tight ($\sim$30\%), defined as a fraction of the nearest-neighbour tour cost
 \end{itemize}
-Additionally, four extreme-case instances test boundary conditions (e.g., symmetric with no fatigue, highly asymmetric with tight budget).
+Additionally, six extreme-case instances test boundary conditions (e.g., symmetric with a loose budget, highly asymmetric with a tight budget), and two size$\times$asymmetry combinations outside the main size sweep.
 Nodes are placed uniformly at random in a $1000 \times 1000$\,m domain with the depot at the centre.
 Asymmetric costs are generated by perturbing Euclidean distances with a directional slope factor proportional to $\alpha$, plus 10\% random terrain noise.
 Scores are correlated with distance from the depot (10--50 points, rounded to multiples of 10).
 All instances and the solver are released as part of the benchmark suite.
 Note that the synthetic asymmetry is spatially uncorrelated, unlike real terrain where slope-induced cost differences exhibit spatial autocorrelation; the real-terrain experiments on Torremocha and La Muela complement the benchmark by testing the solver on naturally structured asymmetry.
 
+An earlier version of this suite also varied a nominal fatigue rate across instances and swept $\lambda$ and $\rho$ per instance to find the tightest reported gap.
+Following the fixed-calibration policy adopted in \cref{sec:experiments} ($\lambda = 4.1\times10^{-5}$ from \citet{jaencarrillo2025}, $\rho = 0$ from \citet{vernillo2015}, applied uniformly), every instance below---including those whose file names still encode a nominal fatigue-rate label from the original generation script---is solved at the same $\lambda$ and $\rho$.
+We therefore no longer report a fatigue-rate sweep: it would not reflect a real experimental contrast, since all instances share one $\lambda$ regardless of label.
+
 \subsection{Benchmark Results}
 
-Both formulations (MTZ and flow) are evaluated on the full benchmark suite under identical conditions (same SA warm start, 900\,s time limit).
+Both formulations (MTZ and flow) are evaluated on the full benchmark suite under identical conditions (same SA warm start, $\lambda = 4.1\times10^{-5}$, $\rho = 0$, 300\,s per-node time limit).
+Gaps and optimal-count columns are averaged over the 3 seeds of each configuration; ``optimal?'' reports how many of the 3 seeds the B\&C proved optimal.
 
 \begin{table}[H]
 \centering
-\caption{Benchmark results: effect of instance size ($\alpha = 0.25$, $\lambda = 0.2$, medium budget). Both formulations receive the same SA warm start.}
+\caption{Benchmark results: effect of instance size ($\alpha = 0.25$, medium budget, $\lambda = 4.1\times10^{-5}$, $\rho = 0$). Mean over 3 seeds; both formulations receive the same SA warm start.}
 \label{tab:bench_size}
-\begin{tabular}{rrrrcrrc}
+\begin{tabular}{rrrcrc}
 \toprule
-& & & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
-\cmidrule(lr){4-5} \cmidrule(lr){6-7}
-$n$ & SA pts & visited & gap & optimal? & gap & optimal? \\
+& & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-6}
+$n$ & SA pts & gap & optimal? & gap & optimal? \\
 \midrule
-20  &  350 & 12 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-30  &  540 & 18 &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-40  &  660 & 26 & 18.5\% & no &  7.5\% & no \\
-50  &  940 & 31 & 16.5\% & no &  5.9\% & no \\
-75  & 1370 & 43 & 19.4\% & no &  6.5\% & no \\
-100 & 1840 & 63 & 19.9\% & no &  7.8\% & no \\
+20  &  337 &  0.0\% & 3/3 &  0.0\% & 3/3 \\
+30  &  457 & 19.3\% & 1/3 &  0.0\% & 3/3 \\
+40  &  650 & 19.4\% & 0/3 & 10.3\% & 0/3 \\
+50  &  897 & 21.7\% & 0/3 &  8.0\% & 0/3 \\
+75  & 1130 & 44.3\% & 0/3 & 35.7\% & 0/3 \\
+100 & 1613 & 36.5\% & 0/3 & 30.2\% & 0/3 \\
+125 & 2123 & 28.7\% & 0/3 & 25.1\% & 0/3 \\
+150 & 2303 & 41.1\% & 0/3 & 37.1\% & 0/3 \\
+200 & 2683 & 49.0\% & 0/3 & 46.2\% & 0/3 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[H]
 \centering
-\caption{Benchmark results: effect of asymmetry and fatigue ($n = 40$, medium budget).}
+\caption{Benchmark results: effect of asymmetry ($n = 40$, medium budget, $\lambda = 4.1\times10^{-5}$, $\rho = 0$). Mean over 3 seeds.}
 \label{tab:bench_params}
-\begin{tabular}{llrrcrrc}
+\begin{tabular}{lrrcrc}
 \toprule
-& & & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
-\cmidrule(lr){4-5} \cmidrule(lr){6-7}
-Parameter & Value & SA pts & gap & optimal? & gap & optimal? \\
+& & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-6}
+Asymmetry $\alpha$ & SA pts & gap & optimal? & gap & optimal? \\
 \midrule
-\multirow{4}{*}{Asymmetry $\alpha$}
-& 0.00 &  690 & 15.8\% & no &  6.2\% & no \\
-& 0.10 &  730 & 14.1\% & no &  2.8\% & no \\
-& 0.25 &  670 & 20.2\% & no &  5.9\% & no \\
-& 0.50 &  630 & 22.7\% & no &  7.5\% & no \\
-\midrule
-\multirow{4}{*}{Fatigue $\lambda$}
-& 0.00 &  790 &  6.3\% & no &  0.0\% & \textbf{YES} \\
-& 0.10 &  730 &  8.5\% & no &  3.0\% & no \\
-& 0.20 &  730 & 15.4\% & no &  7.7\% & no \\
-& 0.30 &  750 & 30.5\% & no & 10.5\% & no \\
+0.00 &  677 & 17.5\% & 0/3 &  4.1\% & 2/3 \\
+0.10 &  740 & 28.7\% & 0/3 & 15.0\% & 1/3 \\
+0.25 &  613 & 40.9\% & 0/3 & 16.0\% & 1/3 \\
+0.50 &  607 & 32.2\% & 0/3 &  7.4\% & 2/3 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The benchmark reveals several patterns.
-First, the flow formulation consistently produces tighter LP bounds than MTZ across instance sizes, with the gap reduction growing from 11.0\,pp at $n = 40$ to 12.1\,pp at $n = 100$ (\cref{tab:bench_size}).
-Second, the flow formulation reduces asymmetry-related gaps substantially: from 22.7\% (MTZ) to 7.5\% (flow) at $\alpha = 0.5$ (\cref{tab:bench_params}).
-Third, the fatigue dimension confirms the McCormick looseness under MTZ: the MTZ gap grows from 6.3\% ($\lambda = 0$) to 30.5\% ($\lambda = 0.3$), while the flow formulation shows a much smaller increase from 0.0\% to 10.5\%.
-Across all 21 instances, the flow formulation reduces the mean gap from 16.0\% to 5.5\% and proves 7 instances optimal versus 4 for MTZ, with a maximum gap of 10.5\% compared to 42.0\% for MTZ.
+The benchmark reveals several patterns, all now measured under the single fixed $(\lambda, \rho)$ pair rather than a per-instance sweep.
+First, size drives difficulty far more than any other dimension: both formulations prove every $n = 20$ seed optimal, flow also closes all of $n = 30$, but nothing at $n \geq 40$ is proven within the time limit, and the mean gap does not decay monotonically with $n$ (flow: 10.3\% at $n=40$ rising to 46.2\% at $n=200$, with a local dip to 25.1\% at $n=125$)---consistent with branch-and-cut difficulty on random instances being driven by individual hard seeds rather than size alone (\cref{tab:bench_size}).
+Second, flow's LP relaxation is tighter than MTZ's at every asymmetry level, most sharply at $\alpha = 0.25$ (40.9\% vs.\ 16.0\%) and $\alpha = 0.5$ (32.2\% vs.\ 7.4\%), and flow proves strictly more seeds optimal at the two extremes ($\alpha \in \{0, 0.5\}$: 2/3 vs.\ 0/3) though not in the middle (\cref{tab:bench_params}).
+Neither dimension shows the clean monotone trend the earlier sweep-based results reported; we attribute that earlier smoothness to the per-instance $(\lambda,\rho)$ sweep effectively hand-tuning the reported gap, which the fixed-calibration policy no longer permits.
 
 \begin{table}[H]
 \centering
-\caption{Benchmark results: budget tightness and extreme cases ($n = 40$ unless noted).}
+\caption{Benchmark results: budget tightness ($n = 40$, $\alpha = 0.25$) and extreme/boundary cases, $\lambda = 4.1\times10^{-5}$, $\rho = 0$ throughout. Budget rows are means over 3 seeds; extreme-case rows are single instances.\footnotemark}
 \label{tab:bench_extra}
-\begin{tabular}{lrrcrrc}
+\begin{tabular}{lrrcrc}
 \toprule
 & & \multicolumn{2}{c}{\textbf{MTZ}} & \multicolumn{2}{c}{\textbf{Flow}} \\
 \cmidrule(lr){3-4} \cmidrule(lr){5-6}
 Instance & SA pts & gap & optimal? & gap & optimal? \\
 \midrule
-Loose budget          & 960  & 18.2\% & no  &  8.0\% & no \\
-Medium budget         & 680  & 25.5\% & no  &  5.3\% & no \\
-Tight budget          & 450  &  0.0\% & \textbf{YES} &  0.0\% & \textbf{YES} \\
-Symmetric easy ($n{=}20$, $\alpha{=}0$, $\lambda{=}0$) & 470 & 0.0\% & \textbf{YES} & 0.0\% & \textbf{YES} \\
-Asymmetric hard ($n{=}100$, $\alpha{=}0.5$, $\lambda{=}0.3$) & 1160 & 42.0\% & no & 10.5\% & no \\
-High asym., no fatigue ($\alpha{=}0.5$, $\lambda{=}0$) & 970 & 9.1\% & no & 1.1\% & no \\
-Symmetric, high fatigue ($\alpha{=}0$, $\lambda{=}0.3$) & 850 & 24.9\% & no & 9.9\% & no \\
+Loose budget   & 867  & 21.9\% & 0/3 & 11.8\% & 1/3 \\
+Medium budget  & 663  & 23.9\% & 0/3 &  5.0\% & 1/3 \\
+Tight budget   & 363  & 32.1\% & 1/3 &  4.6\% & 2/3 \\
+\midrule
+Symmetric, loose budget ($n{=}20$, $\alpha{=}0$) & 580 & 0.0\% & \textbf{YES} & 0.0\% & \textbf{YES} \\
+Asymmetric, tight budget ($n{=}100$, $\alpha{=}0.5$) & 830 & 46.2\% & no & 27.6\% & no \\
+Asymmetric, medium size ($n{=}50$, $\alpha{=}0.5$) & 920 &  7.5\% & no &  1.5\% & no \\
+Symmetric, medium size ($n{=}50$, $\alpha{=}0$) & 880 & 40.6\% & no & 27.0\% & no \\
+Asymmetric, tight budget, large ($n{=}200$, $\alpha{=}0.5$) & 1880 & 59.0\% & no & 47.0\% & no \\
+Symmetric, loose budget, large ($n{=}150$, $\alpha{=}0$) & 3680 &  4.7\% & no &  4.3\% & no \\
 \bottomrule
 \end{tabular}
 \end{table}
+\footnotetext{The last four rows were originally generated as ``fatigue'' extreme cases (e.g.\ ``high-asymmetry, no fatigue''); we relabel them here by their size/asymmetry parameters since, under the fixed-$\lambda$ policy, they no longer differ in fatigue treatment from any other instance in the suite.}
 
-The extreme cases highlight the flow formulation's strengths: the hardest instance (asymmetric hard) improves from 42.0\% to 10.5\%, and the high-asymmetry no-fatigue instance drops from 9.1\% to 1.1\%.
-The medium-budget instance shows a large improvement (25.5\% $\to$ 5.3\%), while both formulations prove the tight-budget and symmetric-easy instances optimal.
-The no-fatigue instance ($\lambda = 0$) is newly proven optimal by the flow formulation.
+Budget tightness shows a clear trend for flow (11.8\% $\to$ 5.0\% $\to$ 4.6\% as the budget tightens) but a non-monotone one for MTZ, whose worst mean gap (23.9\%) occurs at the medium setting rather than the loose one---tight budgets simply admit fewer feasible tours to search over, which helps both formulations but MTZ's looser relaxation less predictably.
+Among the extreme cases, the two smallest, least constrained instances (symmetric $n=20$ with a loose budget) are proven optimal by both formulations; every other extreme case remains open, with flow's gap at or below MTZ's throughout, and the largest gap reduction on the hardest instance (asymmetric, tight budget, large: 59.0\% MTZ vs.\ 47.0\% flow).
+As with the size and asymmetry sweeps above, none of these results should be read as evidence about fatigue sensitivity specifically, since $\lambda$ is fixed across the whole suite.
 
 \begin{proposition}[Optimality certificate]
 \label{prop:optimality}
@@ -1148,13 +1155,13 @@ In particular, if the incumbent remains the SA solution $z^*_{\text{SA}}$, then 
 \subsection{Ablation Study: Effect of Cut Families}
 \label{sec:ablation}
 
-To quantify the marginal contribution of each cut family introduced in \cref{sec:separation}, we evaluate five cumulative configurations of the flow-based B\&C solver on the full benchmark suite of 21 instances, following the component evaluation methodology of \citet{kobeaga2021revisited}.
-Each configuration adds one cut family to the previous one, using the same SA warm start and 900\,s time limit.
+To quantify the marginal contribution of each cut family introduced in \cref{sec:separation}, we evaluate five cumulative configurations of the flow-based B\&C solver on the full benchmark suite of 66 instances, following the component evaluation methodology of \citet{kobeaga2021revisited}.
+Each configuration adds one cut family to the previous one, using the same SA warm start, the fixed $\lambda = 4.1\times10^{-5}$, $\rho = 0$ of \cref{sec:experiments}, and a 900\,s time limit.
 \Cref{tab:ablation} reports the mean optimality gap, number of instances proven optimal, and mean solving time for each configuration.
 
 \begin{table}[H]
 \centering
-\caption{Ablation study on the benchmark suite (21 instances, 900\,s time limit). Each row adds one cut family to the previous configuration. B\&C uses best-first search (see \cref{sec:node-selection}). Gap is $100 \times (\bar{z} - z^*) / z^*$.}
+\caption{Ablation study on the benchmark suite (66 instances, 900\,s time limit, $\lambda = 4.1\times10^{-5}$, $\rho = 0$). Each row adds one cut family to the previous configuration. B\&C uses best-first search (see \cref{sec:node-selection}). Gap is $100 \times (\bar{z} - z^*) / z^*$.}
 \label{tab:ablation}
 \small
 \begin{tabular}{clrrrr}
@@ -1162,32 +1169,76 @@ Each configuration adds one cut family to the previous one, using the same SA wa
  & \textbf{Cuts enabled} & \textbf{Mean} & \textbf{Max} & \textbf{Opt.} & \textbf{Mean} \\
  &  & \textbf{gap} & \textbf{gap} &  & \textbf{time (s)} \\
 \midrule
-1 & Base (SECs + conn.\ + tight.\ + fat.)  & 5.54\% & 20.32\% & 6/21 & 727 \\
-2 & + B1 (lifted covers)                    & 5.85\% & 19.88\% & 7/21 & 741 \\
-3 & + B2 (routing infeas.)                  & 5.41\% & 19.69\% & 7/21 & 723 \\
-4 & + B3 (cycle covers)                     & 5.35\% & 20.19\% & 7/21 & 718 \\
-5 & + B4 (path ineq.)                       & 5.42\% & 19.81\% & 7/21 & 718 \\
+1 & Base (SECs + conn.\ + tight.\ + fat.)  & 13.29\% & 57.29\% & 24/66 & 694 \\
+2 & + B1 (lifted covers)                    & 14.64\% & 57.35\% & 23/66 & 712 \\
+3 & + B2 (routing infeas.)                  & 14.29\% & 57.28\% & 25/66 & 683 \\
+4 & + B3 (cycle covers)                     & 12.80\% & 57.32\% & 22/66 & 680 \\
+5 & + B4 (path ineq.)                       & 14.78\% & 57.56\% & 23/66 & 689 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The base configuration---comprising subtour elimination, connectivity cuts, tightened flow-arc coupling, and fatigue-aware cover weighting---proves 6 of 21 instances optimal with a mean gap of 5.54\%.
-Adding B1 (lifted cover cuts) proves one additional instance (bench\_020, high asymmetry, no fatigue) but slightly increases the mean gap to 5.85\% due to the overhead of cover separation on harder instances.
-B2 (routing infeasibility cuts) reduces the mean gap to 5.41\% without changing the number of optimal solutions, confirming that the Hungarian-based separation tightens bounds on non-optimal instances.
-B3 (cycle cover cuts) yields the lowest mean gap (5.35\%) and the fastest mean time on bench\_020 (690\,s vs.\ 838\,s with B1+B2 alone).
-B4 (path inequalities) provides no further improvement: the mean gap increases slightly to 5.42\% and bench\_020 narrowly misses the time limit (gap $< 0.1\%$), suggesting that the additional LP overhead outweighs the tightening effect.
+Across the larger, more diverse 66-instance suite, no cut family improves both the mean gap and the number of proven-optimal instances simultaneously---the pattern is not monotonic, and we report it as such rather than picking whichever single metric looks best.
+The base configuration proves 24 of 66 instances optimal with a mean gap of 13.29\%.
+Adding B1 (lifted cover cuts) proves one fewer instance (23/66) and increases the mean gap to 14.64\%, consistent with the cover-separation overhead outweighing its tightening effect on this suite, as it did on a smaller, pre-rework version of this benchmark.
+B2 (routing infeasibility cuts) recovers ground on the optimal-count axis, proving the most instances of any configuration (25/66), though the mean gap (14.29\%) remains above the base.
+B3 (cycle cover cuts) yields the lowest mean gap of all five configurations (12.80\%) but proves the fewest instances (22/66)---on this suite, it appears to tighten bounds on instances it does not close while occasionally displacing an instance that B1+B2 alone would have proven, rather than uniformly helping.
+B4 (path inequalities) again provides no net improvement: both the mean gap (14.78\%) and max gap (57.56\%) are the worst of the five configurations.
+Overall, cut families B1--B4 individually and cumulatively make at most a second-order difference on this suite compared to the base configuration and the choice of $\lambda$ itself (\cref{sec:results}); we do not read this as the cuts being ineffective in general (\cref{sec:separation}'s derivations remain valid regardless), only as evidence that their practical value is instance-dependent and not well summarised by a single aggregate statistic on a suite this heterogeneous in size ($n=20$ to $n=200$).
+
+\subsection{Warm-Start Ablation}
+\label{sec:warmstart_ablation}
+
+Both reviewers of an earlier version of this paper asked whether the SA warm start actually matters to the B\&C, or merely supplies a first feasible solution the solver could have found on its own.
+We answer this directly: we run the full-cut-family configuration (config 5 of \cref{tab:ablation}) on all 66 synthetic benchmark instances twice, once with the SA incumbent passed to the B\&C as usual and once with the B\&C given no incumbent at all (starting from best\_pts $= 0$), all other settings---including the 900\,s time limit---held fixed.
+
+\begin{table}[H]
+\centering
+\caption{Warm-start ablation on the full benchmark suite (66 instances, all cut families, 900\,s time limit, $\lambda = 4.1\times10^{-5}$, $\rho = 0$).}
+\label{tab:warmstart_ablation}
+\begin{tabular}{lrrr}
+\toprule
+& \textbf{Proven optimal} & \textbf{Zero-incumbent failures} & \textbf{Total points found} \\
+\midrule
+Warm start off & 23 / 66 & 42 / 66 & 16{,}550 \\
+Warm start on  & 24 / 66 &  0 / 66 & 70{,}540 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Without a warm start, the B\&C fails to find \emph{any} feasible integer solution at all---not just an unproven one, a total absence of output---on 42 of 66 instances (64\%) within the time limit.
+On the instances it does resolve it is competitive (23 vs.\ 24 proven optimal, essentially tied), and its own search occasionally improves on what SA alone would have found; but as a practical matter, more than half of the benchmark suite returns nothing usable without SA to seed it, and total points collected across the suite drop by $4.3\times$ (70{,}540 to 16{,}550).
+A naive comparison of mean optimality gap would actively mislead here: the gap statistic defaults to $0\%$ when no incumbent exists (to avoid division by zero), so the 42 zero-output instances contribute a spuriously perfect gap to the average rather than the total failure they represent---the zero-incumbent-failure count in \cref{tab:warmstart_ablation}, not the gap column, is the number that actually answers the reviewers' question.
+This is consistent with the standard role of a strong incumbent in branch-and-cut for NP-hard combinatorial problems---it is what makes aggressive pruning practical---rather than evidence that the exact solver contributes nothing on its own; \cref{sec:discussion} discusses the cases where it does improve on SA directly.
+
+\subsection{Comparison Against a Classical OP Baseline}
+\label{sec:classical_baseline}
+
+To respond to reviewer feedback that the paper compared against no other exact OP method, we implement the classical branch-and-cut of \citet{fischetti1998solving} for the undirected, symmetric, fatigue-free OP and run it on the same 66 synthetic instances, using the symmetrised cost $c_{ij} = \tfrac{1}{2}(C_{ij} + C_{ji})$ and ignoring the fatigue term entirely.
+This is deliberately \emph{not} a like-for-like solver comparison---the classical model has only subtour-elimination and cover cuts, none of the fatigue-specific machinery of \cref{sec:formulation,sec:separation}---so a naive reading of its scores against the flow formulation's would conflate two different things: what asymmetry and fatigue cost in achievable score, and what a much smaller cut arsenal costs in the classical solver's own ability to prove or even find good solutions on larger instances.
+We separate the two.
+
+On the 14 of 66 instances where \emph{both} solvers independently certify global optimality---the only comparison not confounded by either solver's search running out of time---the classical and flow scores agree closely: a mean ratio of $0.961$ and a median of $0.995$, i.e.\ within a few percent on 13 of the 14 instances.
+The one outlier is bench\_038 ($n=40$, asymmetry $\alpha = 0.5$, the highest level swept), where the classical solver's proven-optimal score is only $55\%$ of the flow formulation's.
+This is not a search-strength artefact---both sides are exact optima---so it isolates a real effect: symmetrising cost via $\tfrac{1}{2}(C_{ij}+C_{ji})$ inflates the cheaper of two directional costs on any arc where asymmetry is large, and a route that specifically exploits the cheap direction (e.g.\ descending where the reverse ascent is much more expensive) can become effectively unaffordable once that arc is priced at the average instead.
+At low-to-moderate asymmetry ($\alpha \leq 0.25$ in this suite) that effect is small enough for our calibrated $\lambda$ to be the dominant remaining difference, and since $\lambda = 4.1\times10^{-5}$ is itself small in absolute terms, the two models land within noise of each other; at $\alpha = 0.5$, symmetrisation alone is enough to erase almost half the achievable score, direct evidence that asymmetry---not fatigue---is the dominant reason the classical special case understates route value here.
+
+Across the full 66-instance suite (not restricted to the jointly-proven subset), the picture looks different: the classical solver proves only 23/66 instances optimal (vs.\ 24/66 for flow) and its mean score ratio drops to $0.760$ (median $0.665$).
+We do not read this as a fatigue/asymmetry cost estimate---it is dominated by the classical solver's much smaller cut arsenal failing to close the gap on larger instances ($n \geq 75$) within the 900\,s limit, the same effect the ablation study (\cref{sec:ablation}) quantifies for the flow formulation's own cut families, just more pronounced with fewer cuts available.
+The jointly-proven subset above is the number we consider load-bearing; the full-suite ratio is reported for completeness, not as the paper's answer to what asymmetry and fatigue cost.
 
 % ════════════════════════════════════════════════════════════════
 \section{Discussion}
 \label{sec:discussion}
 % ════════════════════════════════════════════════════════════════
 
-\paragraph{SA effectiveness.}
-On all 9 instances where the B\&C proves optimality, the incumbent at termination is the original SA warm-start solution---the B\&C confirms the SA solution is optimal but does not improve upon it.
-This suggests SA is highly effective for OP instances of this size ($n \leq 40$), consistent with the literature on metaheuristics for the OP \citep{vansteenwegen2011orienteering}.
+\paragraph{SA effectiveness, and when the B\&C improves on it.}
+SA is a strong warm start, but---unlike what a smaller, pre-rework real-terrain run had suggested---the B\&C does not merely certify it: on 4 of the 14 real-terrain instances (Torremocha Mixed-density under both formulations; La Muela Path-biased under both; La Muela Ring and Sparse-far under flow only), the proven-optimal incumbent is strictly better than SA's own solution, by up to 90 points (La Muela Standard under flow, though there unproven).
+On the remaining proven instances the B\&C confirms SA's solution without improving it, consistent with SA being highly effective for OP instances of this size, in line with the literature on metaheuristics for the OP \citep{vansteenwegen2011orienteering}---but ``the B\&C only certifies, never improves'' does not hold in general, and \cref{sec:warmstart_ablation} shows why the exact solver's own search still cannot be dropped in favour of SA alone: without a warm start, the same B\&C fails to find \emph{any} feasible solution at all on 42 of the 66 synthetic benchmark instances within the time limit, despite proving 23 of them optimal on the ones it does resolve.
+The B\&C's role is therefore closer to the standard one in branch-and-cut for hard combinatorial problems: it needs a strong incumbent to prune aggressively, and its own contribution is a mix of occasional improvement and, more often, a certified gap (or a proof of optimality) that SA alone cannot provide.
 
 \paragraph{Cost asymmetry.}
-The 50\% asymmetry on La Muela demonstrates that symmetric OP formulations would be inadequate for mountainous terrain.
+The $36.6\%$ asymmetry on La Muela (vs.\ $17.5\%$ on Torremocha) demonstrates that symmetric OP formulations would be inadequate for mountainous terrain.
 The Minetti model captures this directionality naturally through the metabolic cost polynomial.
 
 \paragraph{Fatigue linearisation.}

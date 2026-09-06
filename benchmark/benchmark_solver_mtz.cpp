@@ -262,6 +262,10 @@ struct LPModel {
         Highs_setBoolOptionValue(highs, "output_flag", false);
         Highs_setStringOptionValue(highs, "presolve", "on");
         Highs_setStringOptionValue(highs, "solver", "simplex");
+        // Safety net independent of all the B&C-level time checks: none of
+        // those can interrupt a single .solve() call already in progress.
+        // Caps one call, not the search as a whole.
+        Highs_setDoubleOptionValue(highs, "time_limit", 300.0);
         Highs_setStringOptionValue(highs, "simplex_strategy", "1"); // dual simplex
 
         x_col.assign(n, std::vector<int>(n, -1));
@@ -348,6 +352,10 @@ struct LPModel {
         Highs_setBoolOptionValue(highs, "output_flag", false);
         Highs_setStringOptionValue(highs, "presolve", "on");
         Highs_setStringOptionValue(highs, "solver", "simplex");
+        // Safety net independent of all the B&C-level time checks: none of
+        // those can interrupt a single .solve() call already in progress.
+        // Caps one call, not the search as a whole.
+        Highs_setDoubleOptionValue(highs, "time_limit", 300.0);
 
         // Deep-copy via Highs_passLp — no temp file, faster, thread-safe
         {
