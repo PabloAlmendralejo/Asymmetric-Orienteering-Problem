@@ -337,8 +337,15 @@ struct LPModel {
 
         // G[i] -- asymmetric fatigue state, mirrors t_col but propagated
         // with psi_ij weights instead of cm[i][j].
+        // Tiny negative objective coefficient: the state-propagation
+        // constraint is one-sided (>=) and nothing else pressures G
+        // downward, so without this the LP can settle on an inflated G at
+        // a partially-fixed node, pruning away a genuinely feasible
+        // extension. kGRegEps can never outweigh a single point, so it only
+        // breaks ties toward the smallest feasible G.
+        const double kGRegEps = 1e-8;
         for (int i = 0; i < n; ++i)
-            G_col[i] = add_col(0.0, Ghat[i]);
+            G_col[i] = add_col(0.0, Ghat[i], -kGRegEps);
         fix_col(G_col[0], 0.0);
 
         // u[i][j] -- McCormick var for G_i * x_ij (mirrors w_col)
@@ -349,8 +356,15 @@ struct LPModel {
             }
 
         add_flow_constraints();
-        add_time_propagation(inp.cm, inp.bud_raw);
-        add_mccormick(inp.bud_raw);
+        // add_time_propagation/add_mccormick (legacy raw-time MTZ subtour
+        // elimination, pre-dating the fatigue rework) are NOT called: their
+        // Big-M (max(bud_raw - cm[0][i] - cm[j][0], cm[i][j])) is unsound
+        // for t_i/t_j's actual column range [0, bud_raw] (the correct bound
+        // is bud_raw + cm[i][j]), so it could cut off truly feasible
+        // integer solutions. They are also provably redundant at rho=0:
+        // add_fatigue_state_propagation already forces G strictly increasing
+        // along every real arc (psi_ij > 0 whenever rho=0, since dist_ij>0),
+        // which eliminates every non-depot subtour on its own.
         add_fatigue_state_propagation(inp, inp.rho);
         add_fatigue_mccormick_asym();
         add_fatigue_budget_asym(inp.cm, inp.bud_raw, inp.fatigue_rate);
@@ -490,9 +504,17 @@ struct LPModel {
             for (int j = 0; j < n; ++j) {
                 if (u_col[i][j] < 0) continue;
                 double g_ub = get_col_ub(u_col[i][j]);
-                add_row(0.0, 1e30,
+                // Correct McCormick lower bound: u_ij >= G_i - g_ub*(1-x_ij),
+                // i.e. u_ij - G_i - g_ub*x_ij >= -g_ub. The previous version
+                // had +g_ub*x_ij with a 0.0 row lower bound (missing the
+                // (1-x_ij) complement), forcing u_ij = G_i unconditionally
+                // and G_i = 0 whenever any outgoing arc from i is unused --
+                // i.e. on almost every real route. Found via a direct test:
+                // fixing x to a known-feasible route made the LP report
+                // infeasible even for a single-node prefix.
+                add_row(-g_ub, 1e30,
                         {u_col[i][j], G_col[i], x_col[i][j]},
-                        {1.0,         -1.0,      g_ub});
+                        {1.0,         -1.0,      -g_ub});
                 add_row(-1e30, 0.0,
                         {u_col[i][j], x_col[i][j]},
                         {1.0,         -g_ub});
@@ -873,10 +895,7 @@ std::vector<int> greedy_route(const Input& inp) {
     std::vector<bool> visited(n, false);
     visited[0] = true;
     std::vector<int> route;
-    double cost = 0.0, elapsed = 0.0;
     int cur = 0;
-    // Use worst-case fatigue budget for consistency with LP
-    double bud_lp = inp.bud_raw / (1.0 + inp.fatigue_rate);
 
     while (true) {
         int best_j = -1;
@@ -885,13 +904,12 @@ std::vector<int> greedy_route(const Input& inp) {
             if (visited[j]) continue;
             double go = inp.cm[cur][j], back = inp.cm[j][0];
             if (!std::isfinite(go) || !std::isfinite(back)) continue;
-            if (cost + go + back > bud_lp) continue;
-
-            double fm_go = 1.0 + inp.fatigue_rate * (elapsed / std::max(inp.bud_raw, 1.0));
-            double fat_go = go * fm_go;
-            double fm_back = 1.0 + inp.fatigue_rate * ((elapsed + go) / std::max(inp.bud_raw, 1.0));
-            double fat_back = fat_go + back * fm_back;
-            if (fat_back > inp.bud_raw) continue;
+            // Exact clipped, asymmetric fatigue check (matches is_feasible_route
+            // and solve_sa's move acceptance) -- NOT the old linear f(t)=1+lambda*t/B
+            // formula, which under-penalises fatigue at the tiny calibrated lambda
+            // and can accept routes the true model rejects.
+            auto trial = route; trial.push_back(j);
+            if (rcost_fatigue_asym(inp, trial, inp.rho) > inp.bud_raw) continue;
 
             double ratio = inp.pts[j] / std::max(go, 1e-9);
             if (ratio > best_ratio) {
@@ -901,9 +919,6 @@ std::vector<int> greedy_route(const Input& inp) {
         }
         if (best_j < 0) break;
 
-        double go = inp.cm[cur][best_j];
-        elapsed += go;
-        cost += go;
         visited[best_j] = true;
         route.push_back(best_j);
         cur = best_j;

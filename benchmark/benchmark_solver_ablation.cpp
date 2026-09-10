@@ -1442,10 +1442,7 @@ std::vector<int> greedy_route(const Input& inp) {
     std::vector<bool> visited(n, false);
     visited[0] = true;
     std::vector<int> route;
-    double cost = 0.0, elapsed = 0.0;
     int cur = 0;
-    // Use worst-case fatigue budget for consistency with LP
-    double bud_lp = inp.bud_raw / (1.0 + inp.fatigue_rate);
 
     while (true) {
         int best_j = -1;
@@ -1454,13 +1451,12 @@ std::vector<int> greedy_route(const Input& inp) {
             if (visited[j]) continue;
             double go = inp.cm[cur][j], back = inp.cm[j][0];
             if (!std::isfinite(go) || !std::isfinite(back)) continue;
-            if (cost + go + back > bud_lp) continue;
-
-            double fm_go = 1.0 + inp.fatigue_rate * (elapsed / std::max(inp.bud_raw, 1.0));
-            double fat_go = go * fm_go;
-            double fm_back = 1.0 + inp.fatigue_rate * ((elapsed + go) / std::max(inp.bud_raw, 1.0));
-            double fat_back = fat_go + back * fm_back;
-            if (fat_back > inp.bud_raw) continue;
+            // Exact clipped, asymmetric fatigue check (matches is_feasible_route
+            // and solve_sa's move acceptance) -- NOT the old linear f(t)=1+lambda*t/B
+            // formula, which under-penalises fatigue at the tiny calibrated lambda
+            // and can accept routes the true model rejects.
+            auto trial = route; trial.push_back(j);
+            if (rcost_fatigue_asym(inp, trial, inp.rho) > inp.bud_raw) continue;
 
             double ratio = inp.pts[j] / std::max(go, 1e-9);
             if (ratio > best_ratio) {
@@ -1470,9 +1466,6 @@ std::vector<int> greedy_route(const Input& inp) {
         }
         if (best_j < 0) break;
 
-        double go = inp.cm[cur][best_j];
-        elapsed += go;
-        cost += go;
         visited[best_j] = true;
         route.push_back(best_j);
         cur = best_j;
