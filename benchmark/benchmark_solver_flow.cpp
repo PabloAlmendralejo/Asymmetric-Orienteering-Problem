@@ -359,8 +359,19 @@ struct LPModel {
             }
 
         add_flow_conservation();
-        add_time_flow_coupling(inp.cm, inp.bud_raw, inp.fatigue_rate);
-        add_time_flow_propagation(inp.cm, inp.bud_raw);
+        // add_time_flow_coupling/add_time_flow_propagation (legacy raw-time
+        // flow mechanism, pre-dating the fatigue rework) are NOT called:
+        // empirically confirmed (via an isolated diagnostic on this suite's
+        // bench_005/bench_059) to spuriously prune truly optimal routes,
+        // causing Flow's B&C to report a false "proved optimal" at a
+        // strictly lower point total than the actual optimum. Disabling
+        // them recovers the true optimum in both cases. Provably redundant
+        // besides: add_fatigue_flow_coupling/add_fatigue_flow_propagation
+        // already enforce a genuine per-arc budget via the g_col fatigue
+        // state, so this separate raw-time f_col tracking adds no coverage
+        // the fatigue-state mechanism doesn't already provide.
+        // add_time_flow_coupling(inp.cm, inp.bud_raw, inp.fatigue_rate);
+        // add_time_flow_propagation(inp.cm, inp.bud_raw);
         add_fatigue_flow_coupling();
         add_fatigue_flow_propagation(inp, inp.rho);
         add_fatigue_budget_asym(inp.cm, inp.bud_raw, inp.fatigue_rate);
